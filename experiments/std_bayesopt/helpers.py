@@ -62,11 +62,15 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, **kwargs):
     pred_dist = torch.distributions.Normal(pred_mean, pred_var.sqrt())
     conf_scores = pred_dist.log_prob(train_labels.squeeze(-1))
     
-    ranks_by_score = torch.stack([
-        torchsort.soft_rank(
-            cc, regularization="l2", regularization_strength=0.1
-        ) for cc in conf_scores
-    ]) # seems to be returning one indexed values for some reason
+    if conf_scores.ndim > 2:
+        ranks_by_score = torch.stack([
+            torchsort.soft_rank(
+                cc, regularization="l2", regularization_strength=0.1
+            ) for cc in conf_scores
+        ]) # seems to be returning one indexed values for some reason
+    else:
+        ranks_by_score = torchsort.soft_rank(conf_scores, regularization="l2", regularization_strength=0.1)
+        
     num_total, _ = ranks_by_score.max(-1, keepdim=True)
     norm_ranks = (ranks_by_score) / num_total
     conf_pred_mask = F.threshold(norm_ranks[..., -1], alpha, 0.) / norm_ranks[..., -1]
@@ -110,23 +114,26 @@ class ConformalPosterior(Posterior):
     
     @property
     def event_shape(self):
-        return self.X.shape[:-2]
+        return self.X.shape[:-2] + torch.Size([1])
     
-    def rsample(self, sample_shape=()):
+    def rsample(self, sample_shape=(), base_samples=None):
         target_grid = generate_target_grid(self.target_bounds, *sample_shape)
-        
+        target_grid = target_grid.to(self.X) 
         # for later on in the evaluation
         self.gp.conf_pred_mask = conformal_gp_regression(self.gp, self.X, target_grid, self.alpha)
-        return target_grid.expand(*self.X.shape[:-1], -1, -1).unsqueeze(0)
+        out = target_grid.expand(*self.X.shape[:-1], -1, -1).unsqueeze(0)
+        return out
     
 
 class PassSampler(MCSampler):
     def __init__(self, num_samples):
         super().__init__(batch_range=(0, -2))
         self._sample_shape = torch.Size([num_samples])
+        self.collapse_batch_dims = True
         
     def forward(self, posterior):
-        return posterior.rsample(self.sample_shape).transpose(-2, -3)
+        res = posterior.rsample(self.sample_shape).transpose(-2, -3)
+        return res
     
     def _construct_base_samples(self, posterior, shape):
         pass

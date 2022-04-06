@@ -20,6 +20,7 @@ from utils import (
     get_problem,
     assess_coverage,
 )
+from helpers import qConformalExpectedImprovement, qConformalNoisyExpectedImprovement
 
 def main(
     seed: int = 0,
@@ -42,6 +43,8 @@ def main(
     torch.random.manual_seed(seed)
 
     bb_fn = get_problem(problem, dim)
+    bb_fn = bb_fn.to(device, dtype)
+    # bounds = torch.stack((torch.zeros(bb_fn.dim), torch.ones(bb_fn.dim)).to(device, dtype)
     bounds = bb_fn.bounds
 
     best_observed_ei, best_observed_nei, best_observed_cei, best_observed_cnei, best_random = (
@@ -68,7 +71,7 @@ def main(
     ) = generate_initial_data(
         num_init, bb_fn, noise_se, device, dtype
     )
-    heldout_x, heldout_obj, _ = generate_initial_data(100 * num_init, bb_fn, noise_se, device, dtype)
+    heldout_x, heldout_obj, _ = generate_initial_data(10 * num_init, bb_fn, noise_se, device, dtype)
 
     mll_ei, model_ei = initialize_model(
         train_x_ei, train_obj_ei, train_yvar, method=method, alpha=alpha,
@@ -114,7 +117,6 @@ def main(
         coverage_nei.append(assess_coverage(model_nei, heldout_x, heldout_obj, alpha))
         coverage_cei.append(assess_coverage(model_cei, heldout_x, heldout_obj, alpha))
         coverage_cnei.append(assess_coverage(model_cnei, heldout_x, heldout_obj, alpha))
-        print("finished assessing coverage")
         
         # define the qEI and qNEI acquisition modules using a QMC sampler
         qmc_sampler = SobolQMCNormalSampler(num_samples=mc_samples)
@@ -132,17 +134,22 @@ def main(
             sampler=qmc_sampler,
         )
 
-        qconEI = qExpectedImprovement(
+        model_cei.conformal()
+        qconEI = qConformalExpectedImprovement(
             model=model_cei,
             best_f=(train_obj_cei).max(),
             sampler=PassSampler(mc_samples),
         )
+        qconEI.objective._verify_output_shape = False
 
-        qconNEI = qNoisyExpectedImprovement(
+        model_cnei.conformal()
+        qconNEI = qConformalNoisyExpectedImprovement(
             model=model_cnei,
             X_baseline=train_x_cnei,
             sampler=PassSampler(mc_samples),
+            cache_root=False,
         )
+        qconNEI.objective._verify_output_shape = False
 
         # optimize and get new observation
         optimize_acqf_kwargs = {

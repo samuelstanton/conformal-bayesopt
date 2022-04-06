@@ -78,7 +78,7 @@ def update_random_observations(BATCH_SIZE, best_random, problem=lambda x: x, dim
     return best_random
 
 def get_exact_model(
-    x, y, yvar, use_input_transform=False, use_outcome_transform=False, alpha=0.05, **kwargs
+    x, y, yvar, use_input_transform=True, use_outcome_transform=True, alpha=0.05, **kwargs
 ):
     conformal_bounds = torch.tensor([[-3., 3.]]).t() # this can be standardized w/o worry?
 
@@ -116,12 +116,14 @@ def assess_coverage(model, inputs, targets, alpha = 0.05):
 
         # convert conformal prediction mask to prediction set
         model.conformal()
-        sampler = PassSampler(256)
+        sampler = PassSampler(128)
         posterior = model.posterior(inputs)
-        target_grid = sampler(posterior)[0,0]
+        target_grid = sampler(posterior)[0,:,0,0] 
         conformal_conf_region = construct_conformal_bands(model.conf_pred_mask, target_grid)
+        conformal_conf_region = [cc.to(targets) for cc in conformal_conf_region]
         conformal_coverage = ((targets > conformal_conf_region[0]) * (targets < conformal_conf_region[1])).float().sum() / targets.shape[0]
-
+    model.train()
+    model.standard()
     return std_coverage, conformal_coverage
 
 def construct_conformal_bands(conf_pred_mask, target_grid):
@@ -156,13 +158,6 @@ def optimize_acqf_and_get_observation(
     # observe new values
     new_x = candidates.detach()
     exact_obj = fn(new_x).unsqueeze(-1)  # add output dimension
-    # if outcome_constraint is not None:
-    #     exact_con = outcome_constraint(new_x).unsqueeze(-1)  # add output dimension
+
     new_obj = exact_obj + noise_se * torch.randn_like(exact_obj)
-    # if is_poisson:
-    #     new_obj = Poisson(new_obj.exp()).sample()
-    # if outcome_constraint is not None:
-    #     new_con = exact_con + noise_se * torch.randn_like(exact_con)
-    # else:
-    #     new_con = None
     return new_x, new_obj
