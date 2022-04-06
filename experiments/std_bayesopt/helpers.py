@@ -23,6 +23,13 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, **kwargs):
     Returns:
         conf_pred_mask (torch.Tensor): (batch, grid_size)
     """
+    # print(test_inputs)
+    # if test_inputs.requires_grad:
+    #     def gfunc(g):
+    #         print("inputs", g.norm())
+    #         return torch.nan_to_num(g)
+    #     ti = test_inputs.register_hook(gfunc)
+
     # retraining: condition the GP at every target grid point for every test input
     expanded_inputs = test_inputs.unsqueeze(-3).expand(
         *[-1]*(test_inputs.ndim-2), target_grid.shape[0], -1, -1
@@ -61,21 +68,44 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, **kwargs):
     pred_var = (pred_covar.diag() + noise).clamp(min=1e-6)
     pred_dist = torch.distributions.Normal(pred_mean, pred_var.sqrt())
     conf_scores = pred_dist.log_prob(train_labels.squeeze(-1))
-    
+  
+    # if conf_scores.requires_grad:
+    #     cs = conf_scores.register_hook(lambda g: torch.nan_to_num(g))
+
     if conf_scores.ndim > 2:
         ranks_by_score = torch.stack([
             torchsort.soft_rank(
-                cc, regularization="l2", regularization_strength=0.1
+                cc, regularization="l2", regularization_strength=1.0
             ) for cc in conf_scores
         ]) # seems to be returning one indexed values for some reason
     else:
-        ranks_by_score = torchsort.soft_rank(conf_scores, regularization="l2", regularization_strength=0.1)
-        
-    num_total, _ = ranks_by_score.max(-1, keepdim=True)
-    norm_ranks = (ranks_by_score) / num_total
-    conf_pred_mask = F.threshold(norm_ranks[..., -1], alpha, 0.) / norm_ranks[..., -1]
-    return conf_pred_mask
+        ranks_by_score = torchsort.soft_rank(conf_scores, regularization="l2", regularization_strength=1.0)
+    # if ranks_by_score.requires_grad:
+    #     rs = ranks_by_score.register_hook(lambda g: torch.nan_to_num(g))    
+    # num_total, _ = ranks_by_score.max(-1, keepdim=True)
+    # norm_ranks = (ranks_by_score) / num_total
+    # conf_pred_mask = F.threshold(norm_ranks[..., -1], alpha, 0.) / norm_ranks[..., -1]
+    # return conf_pred_mask
+    # TODO replace this with weights from classifier (should sum to 1)
+    num_total = target_grid.shape[0]
+    imp_weights = 1. / num_total
+    
+    original_shape = ranks_by_score.shape
+    temp = 0.1
+    rank_mask = torch.sigmoid((ranks_by_score - ranks_by_score[...,-1][...,None]) / temp)
+    # rank_mask = torch.stack([
+    #     F.threshold(-r, (-r[..., -1] - 1e-6).item(), 0.) for r in ranks_by_score.flatten(0, -2)
+    # ]).view(*original_shape) / ranks_by_score
+    cum_weights = (rank_mask * imp_weights).sum(-1)
+    # conf_pred_mask = F.threshold(cum_weights, alpha, 0.) / (cum_weights + 1e-6)
+    conf_pred_mask = torch.sigmoid((cum_weights - alpha) / temp)
+    # if conf_pred_mask.requires_grad:
+    #     def gfunc(g):
+    #         print(g.norm())
+    #         return torch.nan_to_num(g)
+    #     cpm = conf_pred_mask.register_hook(gfunc)
 
+    return conf_pred_mask#.register_hook(lambda g: torch.nan_to_num(g))
 
 # TODO: write a sub-class for these
 
