@@ -115,14 +115,29 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2, clas
 
 class qConformalExpectedImprovement(qExpectedImprovement):
     def forward(self, X):
-        unconformalized_acqf = super().forward(X) # batch x grid x q
-        return (self.model.conf_pred_mask * unconformalized_acqf).sum(-1)
+        """
+        :param X: (*batch_shape, q, d)
+        :return: (*batch_shape)
+        """
+        unconformalized_acqf = super().forward(X)  # batch x grid
+        res = torch.trapezoid(
+            y=self.model.conf_pred_mask * unconformalized_acqf,
+            x=self.model.conf_tgt_grid,
+            dim=-1
+        )
+        return res
+        # return (self.model.conf_pred_mask * unconformalized_acqf).sum(-1)
     
 class qConformalNoisyExpectedImprovement(qNoisyExpectedImprovement):
     def forward(self, X):
         unconformalized_acqf = super().forward(X) # batch x grid x q
-        return (self.model.conf_pred_mask * unconformalized_acqf).sum(-1) 
-
+        res = torch.trapezoid(
+            y=self.model.conf_pred_mask * unconformalized_acqf,
+            x=self.model.conf_tgt_grid,
+            dim=-1
+        )
+        return res
+        # return (self.model.conf_pred_mask * unconformalized_acqf).sum(-1)
 
 def generate_target_grid(bounds, resolution):
     target_dim = bounds.shape[1]
@@ -154,6 +169,7 @@ class ConformalPosterior(Posterior):
         target_grid = generate_target_grid(self.target_bounds, *sample_shape)
         target_grid = target_grid.to(self.X) 
         # for later on in the evaluation
+        self.gp.conf_tgt_grid = target_grid.squeeze(-1)
         self.gp.conf_pred_mask = conformal_gp_regression(self.gp, self.X, target_grid, self.alpha)
         out = target_grid.expand(*self.X.shape[:-1], -1, -1).unsqueeze(0)
         return out
