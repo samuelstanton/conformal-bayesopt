@@ -1,8 +1,9 @@
 setuptools==60.2.0
-torch==1.10.0
-torchvision==0.11.1
-git+https://github.com/cornellius-gp/gpytorch.git@307ef9c7b56dee3635dd9e7d06a03bf51f66f6e1
-git+https://github.com/pytorch/botorch.git@c2cb5bc6a2e61b2612ba505865935b681861298d
+numpy==1.22.3
+torch==1.11.0
+torchvision
+git+https://github.com/cornellius-gp/gpytorch.git@master
+git+https://github.com/pytorch/botorch.git@main
 git+https://github.com/samuelstanton/upcycle.git@master
 python-levenshtein==0.12.2
 wandb==0.10.28
@@ -26,3 +27,4 @@ cachetools==5.0.0
 jupyter==1.0.0
 statsmodels==0.13.2
 seaborn==0.11.2
+torchsort
