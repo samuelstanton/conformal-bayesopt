@@ -12,7 +12,7 @@ from gpytorch.lazy import DiagLazyTensor
 
 import torchsort
 
-def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2, **kwargs):
+def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2, classifier=None, **kwargs):
     """
     Full conformal Bayes for exact GP regression.
     Args:
@@ -72,6 +72,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2, **kw
     # if conf_scores.requires_grad:
     #     cs = conf_scores.register_hook(lambda g: torch.nan_to_num(g))
 
+    num_total = conf_scores.size(-1)
     original_shape = conf_scores.shape
     ranks_by_score = torchsort.soft_rank(
         conf_scores.flatten(0, -2),
@@ -79,9 +80,11 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2, **kw
         regularization_strength=1.0,
     ).view(*original_shape)
 
-    # TODO replace this with weights from classifier (should sum to 1)
-    num_total = conf_scores.size(-1)
-    imp_weights = 1. / num_total
+    if classifier is None:
+        imp_weights = 1. / num_total
+    else:
+        # TODO replace this with weights from classifier (should sum to 1)
+        raise NotImplementedError
 
     rank_mask = 1 - torch.sigmoid(
         (ranks_by_score - ranks_by_score[..., num_total - 1:num_total]) / temp
