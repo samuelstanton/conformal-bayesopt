@@ -1,6 +1,7 @@
 import torch.nn.functional as F
 import numpy as np
 import torch
+import torch.nn as nn
 
 from botorch.acquisition import qExpectedImprovement, qNoisyExpectedImprovement
 from botorch.posteriors import Posterior
@@ -12,7 +13,8 @@ from gpytorch.lazy import DiagLazyTensor
 
 import torchsort
 
-def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2, classifier=None, **kwargs):
+def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
+                            log_ratio_estimator=None, **kwargs):
     """
     Full conformal Bayes for exact GP regression.
     Args:
@@ -20,6 +22,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2, clas
         inputs (torch.Tensor): (batch, q, input_dim)
         target_grid (torch.Tensor): (grid_size, target_dim)
         alpha (float)
+        log_ratio_estimator (torch.nn.Module): log scale.
     Returns:
         conf_pred_mask (torch.Tensor): (batch, grid_size)
     """
@@ -49,7 +52,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2, clas
     updated_gps = gp.condition_on_observations(expanded_inputs, expanded_targets)
     
     # get ready to compute the conformal scores
-    # train_inputs = updated_gps.train_inputs[0]
+    train_inputs = updated_gps.train_inputs[0]
     train_labels = updated_gps.prediction_strategy.train_labels
     train_labels = train_labels.unsqueeze(-1)  # (num_test, grid_size, num_train + 1, target_dim)
     # lik_train_train_covar = updated_gps.prediction_strategy.lik_train_train_covar
@@ -80,11 +83,11 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2, clas
         regularization_strength=1.0,
     ).view(*original_shape)
 
-    if classifier is None:
+    if log_ratio_estimator is None:
         imp_weights = 1. / num_total
     else:
-        # TODO replace this with weights from classifier (should sum to 1)
-        raise NotImplementedError
+        with torch.no_grad():
+            imp_weights = log_ratio_estimator(train_inputs).squeeze(-1).softmax(dim=-1)
 
     rank_mask = 1 - torch.sigmoid(
         (ranks_by_score - ranks_by_score[..., num_total - 1:num_total]) / temp
@@ -152,6 +155,13 @@ class ConformalPosterior(Posterior):
         self.X = X
         self.target_bounds = target_bounds
         self.alpha = alpha
+
+        ## Remains uniform, when untrained.
+        self.log_ratio_estimator = nn.Sequential(
+            nn.Linear(X.size(-1), 1),
+        ).to(X.device)
+        for p in self.log_ratio_estimator.parameters():
+            p.data = torch.zeros_like(p)
         
     @property
     def device(self):
@@ -170,7 +180,8 @@ class ConformalPosterior(Posterior):
         target_grid = target_grid.to(self.X) 
         # for later on in the evaluation
         self.gp.conf_tgt_grid = target_grid.squeeze(-1)
-        self.gp.conf_pred_mask = conformal_gp_regression(self.gp, self.X, target_grid, self.alpha)
+        self.gp.conf_pred_mask = conformal_gp_regression(self.gp, self.X, target_grid, self.alpha,
+                                                         log_ratio_estimator=self.log_ratio_estimator)
         out = target_grid.expand(*self.X.shape[:-1], -1, -1).unsqueeze(0)
         return out
     
