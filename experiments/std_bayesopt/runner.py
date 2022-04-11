@@ -153,7 +153,7 @@ def main(
 
         # optimize and get new observation
         optimize_acqf_kwargs = {
-            "bounds": bb_fn.bounds,
+            "bounds": bb_fn.bounds.t(),
             "BATCH_SIZE": batch_size,
             "fn": bb_fn,
             "noise_se": noise_se,
@@ -164,9 +164,11 @@ def main(
         new_x_nei, new_obj_nei = optimize_acqf_and_get_observation(
             qNEI, **optimize_acqf_kwargs
         )
+        print("conformal ei")
         new_x_cei, new_obj_cei = optimize_acqf_and_get_observation(
             qconEI, **optimize_acqf_kwargs
         )
+        print("conformal nei")
         new_x_cnei, new_obj_cnei = optimize_acqf_and_get_observation(
             qconNEI, **optimize_acqf_kwargs
         )

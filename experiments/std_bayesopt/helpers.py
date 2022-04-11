@@ -26,13 +26,6 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     Returns:
         conf_pred_mask (torch.Tensor): (batch, grid_size)
     """
-    # print(test_inputs)
-    # if test_inputs.requires_grad:
-    #     def gfunc(g):
-    #         print("inputs", g.norm())
-    #         return torch.nan_to_num(g)
-    #     ti = test_inputs.register_hook(gfunc)
-
     # retraining: condition the GP at every target grid point for every test input
     expanded_inputs = test_inputs.unsqueeze(-3).expand(
         *[-1]*(test_inputs.ndim-2), target_grid.shape[0], -1, -1
@@ -97,22 +90,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
         (cum_weights - alpha) / temp
     )
 
-    # if conf_pred_mask.requires_grad:
-    #     def gfunc(g):
-    #         print(g.norm())
-    #         return torch.nan_to_num(g)
-    #     cpm = conf_pred_mask.register_hook(gfunc)
-
-    # print('\n')
-    # print(gp.likelihood.noise)
-    # print(conf_scores[0])
-    # print(ranks_by_score[0])
-    # print(rank_mask[0] * imp_weights)
-    # print(cum_weights[0])
-    # print(conf_pred_mask[0])
-    # print('\n')
-
-    return conf_pred_mask#.register_hook(lambda g: torch.nan_to_num(g))
+    return conf_pred_mask
 
 # TODO: write a sub-class for these
 
@@ -127,9 +105,8 @@ class qConformalExpectedImprovement(qExpectedImprovement):
             y=self.model.conf_pred_mask * unconformalized_acqf,
             x=self.model.conf_tgt_grid,
             dim=-1
-        )
+        ) / unconformalized_acqf.shape[-1]
         return res
-        # return (self.model.conf_pred_mask * unconformalized_acqf).sum(-1)
     
 class qConformalNoisyExpectedImprovement(qNoisyExpectedImprovement):
     def forward(self, X):
@@ -159,7 +136,7 @@ class ConformalPosterior(Posterior):
         ## Remains uniform, when untrained.
         self.log_ratio_estimator = nn.Sequential(
             nn.Linear(X.size(-1), 1),
-        ).to(X.device)
+        ).to(X)
         for p in self.log_ratio_estimator.parameters():
             p.data = torch.zeros_like(p)
         
