@@ -30,6 +30,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     gp.train()
     gp.eval() # clear caches
     gp.standard()
+    print(test_inputs.shape)
     try:
         gp.posterior(test_inputs) # repopulate caches
     except:
@@ -211,7 +212,7 @@ class ConformalSingleTaskGP(SingleTaskGP):
             return posterior
         else:
             return super().posterior(
-                X = X, observation_noise=observation_noise, posterior_transform=posterior_transform
+                X=X, observation_noise=observation_noise, posterior_transform=posterior_transform
             )
     
     @property

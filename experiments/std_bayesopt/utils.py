@@ -119,7 +119,7 @@ def assess_coverage(model, inputs, targets, alpha = 0.05):
         # convert conformal prediction mask to prediction set
         model.conformal()
         target_grid = generate_target_grid(model.conformal_bounds, model.tgt_grid_res).to(inputs)
-        conf_pred_mask, _ = conformal_gp_regression(model, inputs, target_grid, alpha, temp=1e-4)
+        conf_pred_mask, _ = conformal_gp_regression(model, inputs[:, None], target_grid, alpha, temp=1e-4)
 
         conformal_conf_region = construct_conformal_bands(conf_pred_mask, target_grid)
         conformal_conf_region = [cc.to(targets) for cc in conformal_conf_region]
