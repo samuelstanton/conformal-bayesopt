@@ -14,7 +14,7 @@ import torchsort
 
 
 def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
-                            log_ratio_estimator=None, **kwargs):
+                            ratio_estimator=None, **kwargs):
     """
     Full conformal Bayes for exact GP regression.
     Args:
@@ -22,7 +22,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
         inputs (torch.Tensor): (batch, q, input_dim)
         target_grid (torch.Tensor): (grid_size, target_dim)
         alpha (float)
-        log_ratio_estimator (torch.nn.Module): log scale.
+        ratio_estimator (torch.nn.Module)
     Returns:
         conf_pred_mask (torch.Tensor): (batch, grid_size)
     """
@@ -73,11 +73,12 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
         regularization_strength=1.0,
     ).view(*original_shape)
 
-    if log_ratio_estimator is None:
+    if ratio_estimator is None:
         imp_weights = 1. / num_total
     else:
         with torch.no_grad():
-            imp_weights = log_ratio_estimator(train_inputs).squeeze(-1).softmax(dim=-1)
+            imp_weights = ratio_estimator(train_inputs)
+            imp_weights /= imp_weights.sum(dim=-1, keepdim=True)
 
     rank_mask = 1 - torch.sigmoid(
         (ranks_by_score - ranks_by_score[..., num_total - 1:num_total]) / temp
@@ -126,19 +127,13 @@ def generate_target_grid(bounds, resolution):
 
 
 class ConformalPosterior(Posterior):
-    def __init__(self, X, gp, target_bounds, alpha, tgt_grid_res):
+    def __init__(self, X, gp, target_bounds, alpha, tgt_grid_res, ratio_estimator=None):
         self.gp = gp
         self.X = X
         self.target_bounds = target_bounds
         self.tgt_grid_res = tgt_grid_res
         self.alpha = alpha
-
-        ## Remains uniform, when untrained.
-        self.log_ratio_estimator = nn.Sequential(
-            nn.Linear(X.size(-1), 1),
-        ).to(X)
-        for p in self.log_ratio_estimator.parameters():
-            p.data = torch.zeros_like(p)
+        self.ratio_estimator = ratio_estimator
         
     @property
     def device(self):
@@ -158,7 +153,7 @@ class ConformalPosterior(Posterior):
         # for later on in the evaluation
         self.gp.conf_tgt_grid = target_grid.squeeze(-1)
         self.gp.conf_pred_mask, conditioned_gps = conformal_gp_regression(
-            self.gp, self.X, target_grid, self.alpha, log_ratio_estimator=self.log_ratio_estimator
+            self.gp, self.X, target_grid, self.alpha, ratio_estimator=self.ratio_estimator
         )
 
         conditioned_gps.standard()
@@ -183,12 +178,13 @@ class PassSampler(MCSampler):
 
 
 class ConformalSingleTaskGP(SingleTaskGP):
-    def __init__(self, conformal_bounds, alpha, tgt_grid_res, *args, **kwargs) -> None:
+    def __init__(self, conformal_bounds, alpha, tgt_grid_res, ratio_estimator=None, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.conformal_bounds = conformal_bounds
         self.alpha = alpha
         self.is_conformal = False
         self.tgt_grid_res = tgt_grid_res
+        self.ratio_estimator = ratio_estimator
     
     def conformal(self):
         self.is_conformal = True
@@ -199,7 +195,8 @@ class ConformalSingleTaskGP(SingleTaskGP):
     def posterior(self, X, observation_noise=False, posterior_transform=None):
         if self.is_conformal:
             posterior = ConformalPosterior(
-                X, self, self.conformal_bounds, alpha=self.alpha, tgt_grid_res=self.tgt_grid_res
+                X, self, self.conformal_bounds, alpha=self.alpha, tgt_grid_res=self.tgt_grid_res,
+                ratio_estimator=self.ratio_estimator
             )
             if hasattr(self, "outcome_transform"):
                 posterior = self.outcome_transform.untransform_posterior(posterior)
