@@ -30,7 +30,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     gp.train()
     gp.eval() # clear caches
     gp.standard()
-    print(test_inputs.shape)
+    # print(test_inputs.shape)
     try:
         gp.posterior(test_inputs) # repopulate caches
     except:
@@ -105,6 +105,7 @@ class qConformalExpectedImprovement(qExpectedImprovement):
         :return: (*batch_shape)
         """
         unconformalized_acqf = super().forward(X)  # batch x grid
+        # print(unconformalized_acqf.shape)
         res = torch.trapezoid(
             y=self.model.conf_pred_mask * unconformalized_acqf,
             x=self.model.conf_tgt_grid,
@@ -168,8 +169,15 @@ class ConformalPosterior(Posterior):
         self.gp.conf_pred_mask, conditioned_gps = conformal_gp_regression(
             self.gp, self.X, target_grid, self.alpha, log_ratio_estimator=self.log_ratio_estimator
         )
-        posteriors = conditioned_gps.posterior(self.X)
+
+        conditioned_gps.standard()
+        reshaped_x = self.X[:, None].expand(-1, self.tgt_grid_res, -1, -1)
+        # print(f'X.shape: {reshaped_x.shape}')
+        # print(f'gp.batch_shape: {conditioned_gps.batch_shape}')
+        # print(f'gp.train_inputs[0].shape: {conditioned_gps.train_inputs[0].shape}')
+        posteriors = conditioned_gps.posterior(reshaped_x)
         out = posteriors.rsample(sample_shape, base_samples)
+        # print(out.shape)
         # out = target_grid.expand(*self.X.shape[:-1], -1, -1).unsqueeze(0)
         return out
     
@@ -181,7 +189,9 @@ class PassSampler(MCSampler):
         self.collapse_batch_dims = True
         
     def forward(self, posterior):
-        res = posterior.rsample(self.sample_shape).transpose(-2, -3)
+        # res = posterior.rsample(self.sample_shape).transpose(-2, -3)
+        # print(res.shape)
+        res = posterior.rsample(self.sample_shape)
         return res
     
     def _construct_base_samples(self, posterior, shape):
