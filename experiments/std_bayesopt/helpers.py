@@ -30,11 +30,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     gp.train()
     gp.eval() # clear caches
     gp.standard()
-    # print(test_inputs.shape)
-    try:
-        gp.posterior(test_inputs) # repopulate caches
-    except:
-        import pdb; pdb.set_trace()
+    gp.posterior(test_inputs) # repopulate caches
     gp.conf_pred_mask = None
     gp.conformal()
 
@@ -68,9 +64,6 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     pred_var = (pred_covar.diag() + noise).clamp(min=1e-6)
     pred_dist = torch.distributions.Normal(pred_mean, pred_var.sqrt())
     conf_scores = pred_dist.log_prob(train_labels.squeeze(-1))
-  
-    # if conf_scores.requires_grad:
-    #     cs = conf_scores.register_hook(lambda g: torch.nan_to_num(g))
 
     num_total = conf_scores.size(-1)
     original_shape = conf_scores.shape
@@ -105,12 +98,11 @@ class qConformalExpectedImprovement(qExpectedImprovement):
         :return: (*batch_shape)
         """
         unconformalized_acqf = super().forward(X)  # batch x grid
-        # print(unconformalized_acqf.shape)
         res = torch.trapezoid(
             y=self.model.conf_pred_mask * unconformalized_acqf,
             x=self.model.conf_tgt_grid,
             dim=-1
-        )  # / unconformalized_acqf.shape[-1]
+        )
         return res
 
 
@@ -123,7 +115,6 @@ class qConformalNoisyExpectedImprovement(qNoisyExpectedImprovement):
             dim=-1
         )
         return res
-        # return (self.model.conf_pred_mask * unconformalized_acqf).sum(-1)
 
 
 def generate_target_grid(bounds, resolution):
@@ -172,13 +163,8 @@ class ConformalPosterior(Posterior):
 
         conditioned_gps.standard()
         reshaped_x = self.X[:, None].expand(-1, self.tgt_grid_res, -1, -1)
-        # print(f'X.shape: {reshaped_x.shape}')
-        # print(f'gp.batch_shape: {conditioned_gps.batch_shape}')
-        # print(f'gp.train_inputs[0].shape: {conditioned_gps.train_inputs[0].shape}')
         posteriors = conditioned_gps.posterior(reshaped_x)
         out = posteriors.rsample(sample_shape, base_samples)
-        # print(out.shape)
-        # out = target_grid.expand(*self.X.shape[:-1], -1, -1).unsqueeze(0)
         return out
     
 
@@ -189,8 +175,6 @@ class PassSampler(MCSampler):
         self.collapse_batch_dims = True
         
     def forward(self, posterior):
-        # res = posterior.rsample(self.sample_shape).transpose(-2, -3)
-        # print(res.shape)
         res = posterior.rsample(self.sample_shape)
         return res
     
