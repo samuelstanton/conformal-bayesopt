@@ -28,7 +28,8 @@ def main(
     method: str = "exact",
     batch_size: int = 3,
     n_batch: int = 50,
-    mc_samples: int = 256,
+    tgt_grid_res: int = 32,
+    mc_samples: int = 2,
     num_init: int = 10,
     noise_se: float = 0.5,
     dtype: str = "double",
@@ -86,13 +87,13 @@ def main(
     train_x_cei, train_obj_cei = train_x_ei, train_obj_ei
     best_observed_value_cei = best_observed_value_ei
     mll_cei, model_cei = initialize_model(
-        train_x_cei, train_obj_cei, train_yvar, method=method, alpha=alpha,
+        train_x_cei, train_obj_cei, train_yvar, method=method, alpha=alpha, tgt_grid_res=tgt_grid_res,
     )
 
     train_x_cnei, train_obj_cnei = train_x_ei, train_obj_ei
     best_observed_value_cnei = best_observed_value_ei
     mll_cnei, model_cnei = initialize_model(
-        train_x_cnei, train_obj_cnei, train_yvar, method=method, alpha=alpha,
+        train_x_cnei, train_obj_cnei, train_yvar, method=method, alpha=alpha, tgt_grid_res=tgt_grid_res,
     )
 
     best_observed_ei.append(best_observed_value_ei)

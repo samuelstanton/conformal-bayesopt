@@ -10,8 +10,8 @@ from botorch.models import SingleTaskGP
 
 from gpytorch.lazy import DiagLazyTensor
 
-
 import torchsort
+
 
 def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
                             log_ratio_estimator=None, **kwargs):
@@ -26,6 +26,17 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     Returns:
         conf_pred_mask (torch.Tensor): (batch, grid_size)
     """
+    # cleanup
+    gp.train()
+    gp.eval() # clear caches
+    gp.standard()
+    try:
+        gp.posterior(test_inputs) # repopulate caches
+    except:
+        import pdb; pdb.set_trace()
+    gp.conf_pred_mask = None
+    gp.conformal()
+
     # retraining: condition the GP at every target grid point for every test input
     expanded_inputs = test_inputs.unsqueeze(-3).expand(
         *[-1]*(test_inputs.ndim-2), target_grid.shape[0], -1, -1
@@ -33,15 +44,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     expanded_targets = target_grid.expand(*test_inputs.shape[:-1], -1, -1)
     # the q batch and grid size are flipped
     expanded_targets = expanded_targets.transpose(-2, -3)
-    
-    # cleanup
-    gp.train()
-    gp.eval() # clear caches
-    gp.standard()
-    gp.posterior(expanded_inputs)
-    gp.conf_pred_mask = None
-    gp.conformal()
-    
+
     updated_gps = gp.condition_on_observations(expanded_inputs, expanded_targets)
     
     # get ready to compute the conformal scores
@@ -90,10 +93,10 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
         (cum_weights - alpha) / temp
     )
 
-    return conf_pred_mask
+    return conf_pred_mask, updated_gps
+
 
 # TODO: write a sub-class for these
-
 class qConformalExpectedImprovement(qExpectedImprovement):
     def forward(self, X):
         """
@@ -105,9 +108,10 @@ class qConformalExpectedImprovement(qExpectedImprovement):
             y=self.model.conf_pred_mask * unconformalized_acqf,
             x=self.model.conf_tgt_grid,
             dim=-1
-        ) / unconformalized_acqf.shape[-1]
+        )  # / unconformalized_acqf.shape[-1]
         return res
-    
+
+
 class qConformalNoisyExpectedImprovement(qNoisyExpectedImprovement):
     def forward(self, X):
         unconformalized_acqf = super().forward(X) # batch x grid x q
@@ -119,6 +123,7 @@ class qConformalNoisyExpectedImprovement(qNoisyExpectedImprovement):
         return res
         # return (self.model.conf_pred_mask * unconformalized_acqf).sum(-1)
 
+
 def generate_target_grid(bounds, resolution):
     target_dim = bounds.shape[1]
     grid_coords = [np.linspace(bounds[0,i], bounds[1,i], resolution) for i in range(target_dim)]
@@ -126,11 +131,13 @@ def generate_target_grid(bounds, resolution):
     target_grid = torch.tensor(target_grid).view(-1, target_dim)
     return target_grid.float()
 
+
 class ConformalPosterior(Posterior):
-    def __init__(self, X, gp, target_bounds, alpha):
+    def __init__(self, X, gp, target_bounds, alpha, tgt_grid_res):
         self.gp = gp
         self.X = X
         self.target_bounds = target_bounds
+        self.tgt_grid_res = tgt_grid_res
         self.alpha = alpha
 
         ## Remains uniform, when untrained.
@@ -153,13 +160,16 @@ class ConformalPosterior(Posterior):
         return self.X.shape[:-2] + torch.Size([1])
     
     def rsample(self, sample_shape=(), base_samples=None):
-        target_grid = generate_target_grid(self.target_bounds, *sample_shape)
+        target_grid = generate_target_grid(self.target_bounds, self.tgt_grid_res)
         target_grid = target_grid.to(self.X) 
         # for later on in the evaluation
         self.gp.conf_tgt_grid = target_grid.squeeze(-1)
-        self.gp.conf_pred_mask = conformal_gp_regression(self.gp, self.X, target_grid, self.alpha,
-                                                         log_ratio_estimator=self.log_ratio_estimator)
-        out = target_grid.expand(*self.X.shape[:-1], -1, -1).unsqueeze(0)
+        self.gp.conf_pred_mask, conditioned_gps = conformal_gp_regression(
+            self.gp, self.X, target_grid, self.alpha, log_ratio_estimator=self.log_ratio_estimator
+        )
+        posteriors = conditioned_gps.posterior(self.X)
+        out = posteriors.rsample(sample_shape, base_samples)
+        # out = target_grid.expand(*self.X.shape[:-1], -1, -1).unsqueeze(0)
         return out
     
 
@@ -175,13 +185,15 @@ class PassSampler(MCSampler):
     
     def _construct_base_samples(self, posterior, shape):
         pass
-    
+
+
 class ConformalSingleTaskGP(SingleTaskGP):
-    def __init__(self, conformal_bounds, alpha, *args, **kwargs) -> None:
+    def __init__(self, conformal_bounds, alpha, tgt_grid_res, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.conformal_bounds = conformal_bounds
         self.alpha = alpha
         self.is_conformal = False
+        self.tgt_grid_res = tgt_grid_res
     
     def conformal(self):
         self.is_conformal = True
@@ -191,7 +203,9 @@ class ConformalSingleTaskGP(SingleTaskGP):
         
     def posterior(self, X, observation_noise=False, posterior_transform=None):
         if self.is_conformal:
-            posterior = ConformalPosterior(X, self, self.conformal_bounds, alpha=self.alpha)
+            posterior = ConformalPosterior(
+                X, self, self.conformal_bounds, alpha=self.alpha, tgt_grid_res=self.tgt_grid_res
+            )
             if hasattr(self, "outcome_transform"):
                 posterior = self.outcome_transform.untransform_posterior(posterior)
             return posterior

@@ -9,7 +9,7 @@ from botorch.models.transforms import Standardize, Normalize
 from botorch.test_functions import Branin, Levy, Ackley
 from botorch.optim import optimize_acqf
 
-from helpers import PassSampler, ConformalSingleTaskGP
+from helpers import PassSampler, ConformalSingleTaskGP, generate_target_grid, conformal_gp_regression
 
 def parse():
     parser = argparse.ArgumentParser()
@@ -78,7 +78,8 @@ def update_random_observations(BATCH_SIZE, best_random, problem=lambda x: x, dim
     return best_random
 
 def get_exact_model(
-    x, y, yvar, use_input_transform=True, use_outcome_transform=True, alpha=0.05, **kwargs
+    x, y, yvar, use_input_transform=True, use_outcome_transform=True, alpha=0.05,
+        tgt_grid_res=32, **kwargs
 ):
     conformal_bounds = torch.tensor([[-3., 3.]]).t() # this can be standardized w/o worry?
 
@@ -92,6 +93,7 @@ def get_exact_model(
         input_transform=Normalize(x.shape[-1]) if use_input_transform else None,
         alpha=alpha,
         conformal_bounds=conformal_bounds,
+        tgt_grid_res=tgt_grid_res
     ).to(x)
     if yvar is not None:
         model.likelihood.raw_noise.detach_()
@@ -116,12 +118,14 @@ def assess_coverage(model, inputs, targets, alpha = 0.05):
 
         # convert conformal prediction mask to prediction set
         model.conformal()
-        sampler = PassSampler(128)
-        posterior = model.posterior(inputs)
-        target_grid = sampler(posterior)[0,:,0,0] 
-        conformal_conf_region = construct_conformal_bands(model.conf_pred_mask, target_grid)
+        target_grid = generate_target_grid(model.conformal_bounds, model.tgt_grid_res).to(inputs)
+        conf_pred_mask, _ = conformal_gp_regression(model, inputs, target_grid, alpha, temp=1e-4)
+
+        conformal_conf_region = construct_conformal_bands(conf_pred_mask, target_grid)
         conformal_conf_region = [cc.to(targets) for cc in conformal_conf_region]
-        conformal_coverage = ((targets > conformal_conf_region[0]) * (targets < conformal_conf_region[1])).float().sum() / targets.shape[0]
+        conformal_coverage = (
+            (targets > conformal_conf_region[0]) * (targets < conformal_conf_region[1])
+        ).float().sum() / targets.shape[0]
     model.train()
     model.standard()
     return std_coverage, conformal_coverage
