@@ -153,9 +153,7 @@ def optimize_acqf_and_get_observation(
     Xraw = bounds[0] + (bounds[1] - bounds[0]) * torch.rand(
             RAW_SAMPLES, BATCH_SIZE, bounds.shape[1]).to(bounds)
     Yraw = acq_func(Xraw)
-    print("xr: ", Xraw.norm(), Xraw.shape)
     X = initialize_q_batch_nonneg(Xraw, Yraw, NUM_RESTARTS)
-    print("at init: ", X.norm(), X.shape)
     X.detach_().requires_grad_(True)
 
     # set up the optimizer, make sure to only pass in the candidate set here
@@ -168,11 +166,12 @@ def optimize_acqf_and_get_observation(
         # this performs batch evaluation, so this is an N-dim tensor
         losses = - acq_func(X)  # torch.optim minimizes
         loss = losses.sum()
-        print("loss:", loss) 
+        # print("loss:", loss, X.norm()) 
         loss.backward()  # perform backward pass
-        print(X.grad.norm(), "grad is")
-        optimizer.step()  # take a step
-    
+        # print(X.grad.norm(), "grad is")
+        if not torch.isfinite(X.grad.norm()):
+            X.stop
+        optimizer.step()
         # clamp values to the feasible set
         for j, (lb, ub) in enumerate(zip(*bounds)):
             X.data[..., j].clamp_(lb, ub) # need to do this on the data not X itself
@@ -181,7 +180,7 @@ def optimize_acqf_and_get_observation(
         X_traj.append(X.detach().clone())
     
         if (i + 1) % 15 == 0:
-            print(f"Iteration {i+1:>3}/75 - Loss: {loss.item():>4.3f}")
+            print(f"Iteration {i+1:>3}/75 - Loss: {loss.item():>4.3f} Grad norm: {X.grad.norm().item():>4.3f}")
     with torch.no_grad():
         final_acqf = acq_func(X)
         best_ind = final_acqf.max(0)[1]
