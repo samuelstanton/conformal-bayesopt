@@ -28,10 +28,10 @@ def main(
     method: str = "exact",
     batch_size: int = 3,
     n_batch: int = 50,
-    tgt_grid_res: int = 32,
-    mc_samples: int = 2,
+    tgt_grid_res: int = 64,
+    mc_samples: int = 256,
     num_init: int = 10,
-    noise_se: float = 0.5,
+    noise_se: float = 0.1,
     dtype: str = "double",
     verbose: bool = True,
     output: str = None,
@@ -154,7 +154,7 @@ def main(
 
         # optimize and get new observation
         optimize_acqf_kwargs = {
-            "bounds": bb_fn.bounds.t(),
+            "bounds": bb_fn.bounds,
             "BATCH_SIZE": batch_size,
             "fn": bb_fn,
             "noise_se": noise_se,
