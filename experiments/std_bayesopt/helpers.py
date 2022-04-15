@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-# from botorch.acquisition import qExpectedImprovement, qNoisyExpectedImprovement
+from botorch.acquisition import qExpectedImprovement, qNoisyExpectedImprovement
 from botorch.posteriors import Posterior
 from botorch.sampling import MCSampler
 from botorch.models import SingleTaskGP
@@ -12,7 +12,7 @@ from gpytorch.lazy import DiagLazyTensor
 
 import torchsort
 
-from acquisition import qExpectedImprovement, qNoisyExpectedImprovement
+# from acquisition import qExpectedImprovement, qNoisyExpectedImprovement
 
 def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
                             ratio_estimator=None, **kwargs):
@@ -60,18 +60,19 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     pred_dist = torch.distributions.Normal(posterior.mean, posterior.variance.sqrt())
     o_conf_scores = pred_dist.log_prob(train_labels)#.squeeze()
     
-    updated_gps.conformal()
-    eig_vals, eig_vecs = prior_covar.symeig(eigenvectors=True)  # Q \Lambda Q^{-1} = K_{XX}
-    diag_term = DiagLazyTensor(eig_vals / (eig_vals + noise))  # \Lambda (\Lambda + \sigma I)^{-1}
-    lhs = eig_vecs @ diag_term
-    mean_rhs = eig_vecs.transpose(-1, -2) @ (train_labels - prior_mean)
-    pred_mean = (prior_mean + lhs @ mean_rhs).squeeze(-1)
-    covar_rhs = DiagLazyTensor(eig_vals) @ eig_vecs.transpose(-1, -2)
-    pred_covar = prior_covar - (lhs @ covar_rhs)
-    pred_var = (pred_covar.diag() + noise).clamp(min=1e-6)
-    pred_dist = torch.distributions.Normal(pred_mean, pred_var.sqrt())
-    conf_scores = pred_dist.log_prob(train_labels.squeeze(-1))
-    print(conf_scores.shape, o_conf_scores.shape)
+    # updated_gps.conformal()
+    # eig_vals, eig_vecs = prior_covar.symeig(eigenvectors=True)  # Q \Lambda Q^{-1} = K_{XX}
+    # diag_term = DiagLazyTensor(eig_vals / (eig_vals + noise))  # \Lambda (\Lambda + \sigma I)^{-1}
+    # lhs = eig_vecs @ diag_term
+    # mean_rhs = eig_vecs.transpose(-1, -2) @ (train_labels - prior_mean)
+    # pred_mean = (prior_mean + lhs @ mean_rhs).squeeze(-1)
+    # covar_rhs = DiagLazyTensor(eig_vals) @ eig_vecs.transpose(-1, -2)
+    # pred_covar = prior_covar - (lhs @ covar_rhs)
+    # pred_var = (pred_covar.diag() + noise).clamp(min=1e-6)
+    # pred_dist = torch.distributions.Normal(pred_mean, pred_var.sqrt())
+    # conf_scores = pred_dist.log_prob(train_labels.squeeze(-1))
+    # print(conf_scores.shape, o_conf_scores.shape)
+    conf_scores = o_conf_scores.squeeze(-1)
 
     num_total = conf_scores.size(-1)
     original_shape = conf_scores.shape
@@ -95,8 +96,8 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     conf_pred_mask = torch.sigmoid(
         (cum_weights - alpha) / temp
     )
-    if conf_pred_mask.requires_grad:
-        conf_pred_mask.register_hook(lambda g: print(g.norm(), "mask grad norm"))
+    # if conf_pred_mask.requires_grad:
+    #     conf_pred_mask.register_hook(lambda g: print(g.norm(), "mask grad norm"))
     return conf_pred_mask, updated_gps
 
 
@@ -107,20 +108,20 @@ class qConformalExpectedImprovement(qExpectedImprovement):
         :param X: (*batch_shape, q, d)
         :return: (*batch_shape)
         """
-        if X.requires_grad:
-            X.register_hook(lambda g: print(g.norm(), "X?"))
+        # if X.requires_grad:
+        #     X.register_hook(lambda g: print(g.norm(), "X?"))
 
         unconformalized_acqf = super().forward(X)  # batch x grid
-        if unconformalized_acqf.requires_grad:
-            unconformalized_acqf.register_hook(lambda g: print(g.norm(), "acqf"))
+        # if unconformalized_acqf.requires_grad:
+        #     unconformalized_acqf.register_hook(lambda g: print(g.norm(), "acqf"))
 
         res = torch.trapezoid(
             y=self.model.conf_pred_mask * unconformalized_acqf,
             x=self.model.conf_tgt_grid,
             dim=-1
         )
-        if res.requires_grad:
-            res.register_hook(lambda g: print(g.norm(), "output grad"))
+        # if res.requires_grad:
+        #     res.register_hook(lambda g: print(g.norm(), "output grad"))
         return res
 
 
@@ -175,12 +176,12 @@ class ConformalPosterior(Posterior):
 
         conditioned_gps.standard()
         reshaped_x = self.X[:, None].expand(-1, self.tgt_grid_res, -1, -1)
-        if reshaped_x.requires_grad:
-            reshaped_x.register_hook(lambda g: print(g.norm(), "x norm"))
+        # if reshaped_x.requires_grad:
+        #     reshaped_x.register_hook(lambda g: print(g.norm(), "x norm"))
         posteriors = conditioned_gps.posterior(reshaped_x)
         out = posteriors.rsample(sample_shape, base_samples)
-        if out.requires_grad:
-            out.register_hook(lambda g: print(g.norm(), "post grad post samples"))
+        # if out.requires_grad:
+        #     out.register_hook(lambda g: print(g.norm(), "post grad post samples"))
         return out
     
 
