@@ -68,11 +68,11 @@ def initialize_model(
         model_obj.load_state_dict(state_dict)
     return mll, model_obj
 
-def update_random_observations(BATCH_SIZE, best_random, problem=lambda x: x, dim=6):
+def update_random_observations(BATCH_SIZE, best_random, bounds, problem=lambda x: x, dim=6):
     """Simulates a random policy by taking a the current list of best values observed randomly,
     drawing a new random point, observing its value, and updating the list.
     """
-    rand_x = torch.rand(BATCH_SIZE, dim)
+    rand_x = torch.rand(BATCH_SIZE, dim).to(bounds) * (bounds[1] - bounds[0]) + bounds[0]
     next_random_best = problem(rand_x).max().item()
     best_random.append(max(best_random[-1], next_random_best))
     return best_random
@@ -109,6 +109,8 @@ def get_problem(problem, dim):
         return Ackley(dim=dim, negate=True)
 
 def assess_coverage(model, inputs, targets, alpha = 0.05):
+    targets = targets.squeeze(-1)
+
     with torch.no_grad():
         model.standard()
         # TODO: fix coverage for alpha
@@ -120,7 +122,8 @@ def assess_coverage(model, inputs, targets, alpha = 0.05):
         model.conformal()
         target_grid = generate_target_grid(model.conformal_bounds, model.tgt_grid_res).to(inputs)
         conf_pred_mask, _ = conformal_gp_regression(model, inputs[:, None], target_grid, alpha, temp=1e-4)
-
+        if hasattr(model, "outcome_transform"):
+            target_grid = model.outcome_transform.untransform(target_grid)[0]
         conformal_conf_region = construct_conformal_bands(conf_pred_mask, target_grid)
         conformal_conf_region = [cc.to(targets) for cc in conformal_conf_region]
         conformal_coverage = (
@@ -128,13 +131,13 @@ def assess_coverage(model, inputs, targets, alpha = 0.05):
         ).float().sum() / targets.shape[0]
     model.train()
     model.standard()
-    return std_coverage, conformal_coverage
+    return std_coverage.item(), conformal_coverage.item()
 
 def construct_conformal_bands(conf_pred_mask, target_grid):
     masked_targets = conf_pred_mask.to(target_grid).unsqueeze(-1) * target_grid
     conf_ub = masked_targets.max(-2)[0].cpu().view(-1)
     conf_lb = -1 * (-masked_targets).max(-2)[0].cpu().view(-1)
-    return conf_ub, conf_lb
+    return conf_lb, conf_ub
 
 def optimize_acqf_and_get_observation(
     acq_func,

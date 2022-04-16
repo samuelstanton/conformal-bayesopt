@@ -56,22 +56,10 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     
     # compute conformal scores (posterior predictive log-likelihood)
     updated_gps.standard()
-    posterior = updated_gps.posterior(train_inputs)
+    posterior = updated_gps.posterior(train_inputs, observation_noise = True)
     pred_dist = torch.distributions.Normal(posterior.mean, posterior.variance.sqrt())
-    o_conf_scores = pred_dist.log_prob(train_labels)#.squeeze()
+    o_conf_scores = pred_dist.log_prob(train_labels)
     
-    # updated_gps.conformal()
-    # eig_vals, eig_vecs = prior_covar.symeig(eigenvectors=True)  # Q \Lambda Q^{-1} = K_{XX}
-    # diag_term = DiagLazyTensor(eig_vals / (eig_vals + noise))  # \Lambda (\Lambda + \sigma I)^{-1}
-    # lhs = eig_vecs @ diag_term
-    # mean_rhs = eig_vecs.transpose(-1, -2) @ (train_labels - prior_mean)
-    # pred_mean = (prior_mean + lhs @ mean_rhs).squeeze(-1)
-    # covar_rhs = DiagLazyTensor(eig_vals) @ eig_vecs.transpose(-1, -2)
-    # pred_covar = prior_covar - (lhs @ covar_rhs)
-    # pred_var = (pred_covar.diag() + noise).clamp(min=1e-6)
-    # pred_dist = torch.distributions.Normal(pred_mean, pred_var.sqrt())
-    # conf_scores = pred_dist.log_prob(train_labels.squeeze(-1))
-    # print(conf_scores.shape, o_conf_scores.shape)
     conf_scores = o_conf_scores.squeeze(-1)
 
     num_total = conf_scores.size(-1)
@@ -79,7 +67,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     ranks_by_score = torchsort.soft_rank(
         conf_scores.flatten(0, -2),
         regularization="l2",
-        regularization_strength=1.0,
+        regularization_strength=0.1,
     ).view(*original_shape)
 
     if ratio_estimator is None:
@@ -191,10 +179,6 @@ class PassSampler(MCSampler):
         self._sample_shape = torch.Size([num_samples])
         self.collapse_batch_dims = True
         
-    # def forward(self, posterior):
-    #     res = posterior.rsample(self.sample_shape)
-    #     return res
-    
     def _construct_base_samples(self, posterior, shape):
         pass
 

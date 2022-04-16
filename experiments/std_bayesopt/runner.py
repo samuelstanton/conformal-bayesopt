@@ -165,11 +165,9 @@ def main(
         new_x_nei, new_obj_nei = optimize_acqf_and_get_observation(
             qNEI, **optimize_acqf_kwargs
         )
-        print("conformal ei")
         new_x_cei, new_obj_cei = optimize_acqf_and_get_observation(
             qconEI, **optimize_acqf_kwargs
         )
-        print("conformal nei")
         new_x_cnei, new_obj_cnei = optimize_acqf_and_get_observation(
             qconNEI, **optimize_acqf_kwargs
         )
@@ -188,7 +186,7 @@ def main(
         train_obj_cnei = torch.cat([train_obj_cnei, new_obj_cnei])
 
         # update progress
-        best_random = update_random_observations(batch_size, best_random)
+        best_random = update_random_observations(batch_size, best_random, bounds, bb_fn, dim=bounds.shape[1])
         best_value_ei = train_obj_ei.max().item()
         best_value_nei = train_obj_nei.max().item()
         best_value_cei = train_obj_cei.max().item()
@@ -237,6 +235,7 @@ def main(
                 f"time = {t1-t0:>4.2f}.",
                 end="",
             )
+            print("coverage", coverage_ei[-1], coverage_cnei[-1],)
         else:
             print(".", end="")
 
@@ -254,6 +253,12 @@ def main(
             "cei": coverage_cei,
             "cnei": coverage_cnei,            
         },
+        "inputs": {
+            "ei": train_x_ei,
+            "nei": train_x_nei,
+            "cei": train_x_cei,
+            "cnei": train_x_cnei,
+        }
     }
     return output_dict
 
