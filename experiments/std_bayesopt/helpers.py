@@ -27,13 +27,15 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     Returns:
         conf_pred_mask (torch.Tensor): (batch, grid_size)
     """
-    # cleanup
-    gp.train()
-    gp.eval() # clear caches
+
+    # make sure caches are populated
+    gp.eval()
     gp.standard()
-    gp.posterior(test_inputs) # repopulate caches
-    gp.conf_pred_mask = None
-    gp.conformal()
+    gp.posterior(test_inputs.detach())
+
+    gp.conf_pred_mask = None  # without this line the deepcopy in `gp.condition_on_observations` fails
+    # code smell reminder:
+    gp.conformal()  # fix for BoTorch acq fn batch shape checks
 
     # retraining: condition the GP at every target grid point for every test input
     expanded_inputs = test_inputs.unsqueeze(-3).expand(
@@ -56,7 +58,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     
     # compute conformal scores (posterior predictive log-likelihood)
     updated_gps.standard()
-    posterior = updated_gps.posterior(train_inputs, observation_noise = True)
+    posterior = updated_gps.posterior(train_inputs, observation_noise=True)
     pred_dist = torch.distributions.Normal(posterior.mean, posterior.variance.sqrt())
     o_conf_scores = pred_dist.log_prob(train_labels)
     
@@ -100,6 +102,7 @@ class qConformalExpectedImprovement(qExpectedImprovement):
         #     X.register_hook(lambda g: print(g.norm(), "X?"))
 
         unconformalized_acqf = super().forward(X)  # batch x grid
+
         # if unconformalized_acqf.requires_grad:
         #     unconformalized_acqf.register_hook(lambda g: print(g.norm(), "acqf"))
 
