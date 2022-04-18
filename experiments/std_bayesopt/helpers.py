@@ -59,7 +59,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     posterior = updated_gps.posterior(train_inputs, observation_noise = True)
     pred_dist = torch.distributions.Normal(posterior.mean, posterior.variance.sqrt())
     o_conf_scores = pred_dist.log_prob(train_labels)
-    
+
     conf_scores = o_conf_scores.squeeze(-1)
 
     num_total = conf_scores.size(-1)
