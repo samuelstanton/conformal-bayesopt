@@ -133,6 +133,7 @@ def assess_coverage(model, inputs, targets, alpha = 0.05):
         conformal_coverage = (
             (targets > conformal_conf_region[0]) * (targets < conformal_conf_region[1])
         ).float().sum() / targets.shape[0]
+
     model.train()
     model.standard()
     return std_coverage.item(), conformal_coverage.item()
