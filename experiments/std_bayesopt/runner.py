@@ -107,11 +107,23 @@ def main(
 
         t0 = time.time()
 
+        # enable model parameter gradients
+        model_ei.requires_grad_(True)
+        model_nei.requires_grad_(True)
+        model_cei.requires_grad_(True)
+        model_cnei.requires_grad_(True)
+
         # fit the models
         fit_gpytorch_model(mll_ei)
         fit_gpytorch_model(mll_nei)
         fit_gpytorch_model(mll_cei)
         fit_gpytorch_model(mll_cnei)
+
+        # disable model parameter gradients
+        model_ei.requires_grad_(False)
+        model_nei.requires_grad_(False)
+        model_cei.requires_grad_(False)
+        model_cnei.requires_grad_(False)
 
         # first we assess coverage on the heldout set (which is random)
         coverage_ei.append(assess_coverage(model_ei, heldout_x, heldout_obj, alpha))
