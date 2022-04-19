@@ -9,7 +9,7 @@ from botorch.models.transforms import Standardize, Normalize
 from botorch.test_functions import Branin, Levy, Ackley
 from botorch.optim import optimize_acqf
 
-from experiments.std_bayesopt.helpers import (
+from helpers import (
     PassSampler, ConformalSingleTaskGP, generate_target_grid, conformal_gp_regression
 )
 
@@ -143,7 +143,8 @@ def construct_conformal_bands(model, inputs, alpha, temp=1e-6, max_iter=4):
     grid_res = model.tgt_grid_res
     assert grid_res >= 2
     refine_grid = True
-    for _ in range(max_iter):
+    for i in range(max_iter):
+        print(i, "conormal step")
         target_grid = generate_target_grid(model.conformal_bounds, grid_res).to(inputs)
         conf_pred_mask, _ = conformal_gp_regression(model, inputs[:, None], target_grid, alpha, temp=temp)
 
@@ -159,6 +160,14 @@ def construct_conformal_bands(model, inputs, alpha, temp=1e-6, max_iter=4):
 
     if hasattr(model, "outcome_transform"):
         target_grid = model.outcome_transform.untransform(target_grid)[0]
+
+    # return the min / max of target_grid
+    if refine_grid:
+        where_bad = (conf_pred_mask > 0.5).sum(-1) == 0
+        # sets band to be edge of grid
+        conf_pred_mask[where_bad,0] += 1.
+        conf_pred_mask[where_bad,-1] += 1.
+        # print(x.stop)
 
     # convert conformal prediction mask to upper and lower bounds
     conf_pred_mask = conf_pred_mask.view(-1, *target_grid.shape)  # (num_inputs, num_grid_pts, tgt_dim
