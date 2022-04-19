@@ -9,7 +9,10 @@ from botorch.models.transforms import Standardize, Normalize
 from botorch.test_functions import Branin, Levy, Ackley
 from botorch.optim import optimize_acqf
 
-from .helpers import PassSampler, ConformalSingleTaskGP, generate_target_grid, conformal_gp_regression
+from experiments.std_bayesopt.helpers import (
+    PassSampler, ConformalSingleTaskGP, generate_target_grid, conformal_gp_regression
+)
+
 
 def parse():
     parser = argparse.ArgumentParser()
@@ -29,11 +32,12 @@ def generate_initial_data(
     n, fn, NOISE_SE, device, dtype, is_poisson=False
 ):
     # generate training data
-    train_x = torch.rand(n, fn.dim, device=device, dtype=dtype) * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]
-    exact_obj = fn(train_x).unsqueeze(-1)  # add output dimension
+    train_x = torch.rand(n, fn.dim, device=device, dtype=dtype)# * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]
+    exact_obj = fn(train_x * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]).unsqueeze(-1)  # add output dimension
     # exact_con = outcome_constraint(train_x).unsqueeze(-1)  # add output dimension
     train_obj = exact_obj + NOISE_SE * torch.randn_like(exact_obj)
     best_observed_value = exact_obj.max().item()
+    print(train_x.shape, train_obj.shape)
     return train_x, train_obj, best_observed_value
 
 def initialize_model(
@@ -45,10 +49,12 @@ def initialize_model(
     loss="elbo",
     **kwargs
 ):
+    transform = Standardize(train_obj.shape[-1]).to(train_x.device)
+    t_train_obj = transform(train_obj)[0]
     # define models for objective and constraint
     if method == "variational":
         model_obj = get_var_model(
-            train_x, train_obj, train_yvar, is_poisson=False, **kwargs
+            train_x, t_train_obj, train_yvar, is_poisson=False, **kwargs
         )
         if loss == "elbo":
             mll = VariationalELBO(
@@ -59,14 +65,14 @@ def initialize_model(
                 model_obj.likelihood, model_obj, num_data=train_x.shape[-2]
             )
     elif method == "exact":
-        model_obj = get_exact_model(train_x, train_obj, train_yvar, **kwargs)
+        model_obj = get_exact_model(train_x, t_train_obj, train_yvar, **kwargs)
         mll = ExactMarginalLogLikelihood(model_obj.likelihood, model_obj)
 
     model_obj = model_obj.to(train_x.device)
     # load state dict if it is passed
     if state_dict is not None:
         model_obj.load_state_dict(state_dict)
-    return mll, model_obj
+    return mll, model_obj, transform
 
 def update_random_observations(BATCH_SIZE, best_random, bounds, problem=lambda x: x, dim=6):
     """Simulates a random policy by taking a the current list of best values observed randomly,
@@ -108,7 +114,8 @@ def get_problem(problem, dim):
     elif problem == "ackley":
         return Ackley(dim=dim, negate=True)
 
-def assess_coverage(model, inputs, targets, alpha = 0.05):
+
+def assess_coverage(model, inputs, targets, alpha=0.05, temp=1e-6):
     targets = targets.squeeze(-1)
 
     with torch.no_grad():
@@ -118,13 +125,7 @@ def assess_coverage(model, inputs, targets, alpha = 0.05):
 
         std_coverage = ((targets > conf_region[0]) * (targets < conf_region[1])).float().sum() / targets.shape[0]
 
-        # convert conformal prediction mask to prediction set
-        model.conformal()
-        target_grid = generate_target_grid(model.conformal_bounds, model.tgt_grid_res).to(inputs)
-        conf_pred_mask, _ = conformal_gp_regression(model, inputs[:, None], target_grid, alpha, temp=1e-4)
-        if hasattr(model, "outcome_transform"):
-            target_grid = model.outcome_transform.untransform(target_grid)[0]
-        conformal_conf_region = construct_conformal_bands(conf_pred_mask, target_grid)
+        conformal_conf_region = construct_conformal_bands(model, inputs, alpha, temp)
         conformal_conf_region = [cc.to(targets) for cc in conformal_conf_region]
         conformal_coverage = (
             (targets > conformal_conf_region[0]) * (targets < conformal_conf_region[1])
@@ -134,11 +135,48 @@ def assess_coverage(model, inputs, targets, alpha = 0.05):
     model.standard()
     return std_coverage.item(), conformal_coverage.item()
 
-def construct_conformal_bands(conf_pred_mask, target_grid):
-    masked_targets = conf_pred_mask.to(target_grid).unsqueeze(-1) * target_grid
-    conf_ub = masked_targets.max(-2)[0].cpu().view(-1)
-    conf_lb = -1 * (-masked_targets).max(-2)[0].cpu().view(-1)
+
+def construct_conformal_bands(model, inputs, alpha, temp=1e-6, max_iter=4):
+    # generate conformal prediction mask
+    model.eval()
+    model.conformal()
+    grid_res = model.tgt_grid_res
+    assert grid_res >= 2
+    refine_grid = True
+    for _ in range(max_iter):
+        target_grid = generate_target_grid(model.conformal_bounds, grid_res).to(inputs)
+        conf_pred_mask, _ = conformal_gp_regression(model, inputs[:, None], target_grid, alpha, temp=temp)
+
+        # if prediction set has at least two elements, stop
+        if torch.all((conf_pred_mask > 0.5).float().sum(1) >= 2):
+            refine_grid = False
+        if not refine_grid:
+            break
+
+        grid_res *= 2
+
+    # TODO add error handling for case when max_iter is exhausted
+
+    if hasattr(model, "outcome_transform"):
+        target_grid = model.outcome_transform.untransform(target_grid)[0]
+
+    # convert conformal prediction mask to upper and lower bounds
+    conf_pred_mask = conf_pred_mask.view(-1, *target_grid.shape)  # (num_inputs, num_grid_pts, tgt_dim
+    conf_ub = torch.stack([
+        target_grid[mask > 0.5].max(0)[0] for mask in conf_pred_mask
+    ]).cpu().view(-1)
+    conf_lb = torch.stack([
+        target_grid[mask > 0.5].min(0)[0] for mask in conf_pred_mask
+    ]).cpu().view(-1)
+
+    # conf_ub = target_grid[conf_pred_mask > 0.5].max(-2)[0].cpu().view(-1)
+    # conf_lb = target_grid[conf_pred_mask > 0.5].min(-2)[0].cpu().view(-1)
+
+    # masked_targets = conf_pred_mask.to(target_grid).unsqueeze(-1) * target_grid
+    # conf_ub = masked_targets.max(-2)[0].cpu().view(-1)
+    # conf_lb = -1 * (-masked_targets).max(-2)[0].cpu().view(-1)
     return conf_lb, conf_ub
+
 
 def optimize_acqf_and_get_observation(
     acq_func,
@@ -203,7 +241,7 @@ def optimize_acqf_and_get_observation(
     )
     # observe new values
     new_x = candidates.detach()
-    exact_obj = fn(new_x).unsqueeze(-1)  # add output dimension
+    exact_obj = fn(new_x * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]).unsqueeze(-1)  # add output dimension
 
     new_obj = exact_obj + noise_se * torch.randn_like(exact_obj)
     return new_x, new_obj
