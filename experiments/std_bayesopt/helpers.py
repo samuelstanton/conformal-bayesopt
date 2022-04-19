@@ -20,12 +20,12 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     Full conformal Bayes for exact GP regression.
     Args:
         gp (gpytorch.models.GP)
-        inputs (torch.Tensor): (batch, q, input_dim)
-        target_grid (torch.Tensor): (grid_size, target_dim)
+        inputs (torch.Tensor): (num_q_batches, q_batch_size, input_dim)
+        target_grid (torch.Tensor): (num_grid_pts, target_dim)
         alpha (float)
         ratio_estimator (torch.nn.Module)
     Returns:
-        conf_pred_mask (torch.Tensor): (batch, grid_size)
+        conf_pred_mask (torch.Tensor): (num_q_batches, q_batch_size, num_grid_pts, target_dim)
     """
 
     # make sure caches are populated
@@ -79,6 +79,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
             imp_weights = ratio_estimator(train_inputs)
             imp_weights /= imp_weights.sum(dim=-1, keepdim=True)
 
+    # TODO following line assumes q_batch_size = 1
     rank_mask = 1 - torch.sigmoid(
         (ranks_by_score - ranks_by_score[..., num_total - 1:num_total]) / temp
     )

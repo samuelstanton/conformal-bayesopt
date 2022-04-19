@@ -9,7 +9,7 @@ from botorch.models.transforms import Standardize, Normalize
 from botorch.test_functions import Branin, Levy, Ackley
 from botorch.optim import optimize_acqf
 
-from helpers import PassSampler, ConformalSingleTaskGP, generate_target_grid, conformal_gp_regression
+from .helpers import PassSampler, ConformalSingleTaskGP, generate_target_grid, conformal_gp_regression
 
 def parse():
     parser = argparse.ArgumentParser()
