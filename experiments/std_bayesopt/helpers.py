@@ -14,7 +14,7 @@ import torchsort
 
 # from acquisition import qExpectedImprovement, qNoisyExpectedImprovement
 
-def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
+def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-6,
                             ratio_estimator=None, **kwargs):
     """
     Full conformal Bayes for exact GP regression.
@@ -86,8 +86,6 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-2,
     conf_pred_mask = torch.sigmoid(
         (cum_weights - alpha) / temp
     )
-    # if conf_pred_mask.requires_grad:
-    #     conf_pred_mask.register_hook(lambda g: print(g.norm(), "mask grad norm"))
     return conf_pred_mask, updated_gps
 
 
@@ -98,21 +96,13 @@ class qConformalExpectedImprovement(qExpectedImprovement):
         :param X: (*batch_shape, q, d)
         :return: (*batch_shape)
         """
-        # if X.requires_grad:
-        #     X.register_hook(lambda g: print(g.norm(), "X?"))
-
         unconformalized_acqf = super().forward(X)  # batch x grid
-
-        # if unconformalized_acqf.requires_grad:
-        #     unconformalized_acqf.register_hook(lambda g: print(g.norm(), "acqf"))
 
         res = torch.trapezoid(
             y=self.model.conf_pred_mask * unconformalized_acqf,
             x=self.model.conf_tgt_grid,
             dim=-1
         )
-        # if res.requires_grad:
-        #     res.register_hook(lambda g: print(g.norm(), "output grad"))
         return res
 
 
@@ -167,12 +157,8 @@ class ConformalPosterior(Posterior):
 
         conditioned_gps.standard()
         reshaped_x = self.X[:, None].expand(-1, self.tgt_grid_res, -1, -1)
-        # if reshaped_x.requires_grad:
-        #     reshaped_x.register_hook(lambda g: print(g.norm(), "x norm"))
         posteriors = conditioned_gps.posterior(reshaped_x)
         out = posteriors.rsample(sample_shape, base_samples)
-        # if out.requires_grad:
-        #     out.register_hook(lambda g: print(g.norm(), "post grad post samples"))
         return out
     
 

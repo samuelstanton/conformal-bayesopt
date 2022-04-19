@@ -115,7 +115,7 @@ def get_problem(problem, dim):
         return Ackley(dim=dim, negate=True)
 
 
-def assess_coverage(model, inputs, targets, alpha=0.05, temp=1e-6):
+def assess_coverage(model, inputs, targets, alpha=0.05, temp=1e-6, return_bounds=False):
     targets = targets.squeeze(-1)
 
     with torch.no_grad():
@@ -133,6 +133,8 @@ def assess_coverage(model, inputs, targets, alpha=0.05, temp=1e-6):
 
     model.train()
     model.standard()
+    if return_bounds:
+        return conf_region, conformal_conf_region
     return std_coverage.item(), conformal_coverage.item()
 
 
@@ -144,7 +146,7 @@ def construct_conformal_bands(model, inputs, alpha, temp=1e-6, max_iter=4):
     assert grid_res >= 2
     refine_grid = True
     for i in range(max_iter):
-        print(i, "conormal step")
+        print(i)
         target_grid = generate_target_grid(model.conformal_bounds, grid_res).to(inputs)
         conf_pred_mask, _ = conformal_gp_regression(model, inputs[:, None], target_grid, alpha, temp=temp)
 
@@ -156,18 +158,15 @@ def construct_conformal_bands(model, inputs, alpha, temp=1e-6, max_iter=4):
 
         grid_res *= 2
 
-    # TODO add error handling for case when max_iter is exhausted
-
     if hasattr(model, "outcome_transform"):
         target_grid = model.outcome_transform.untransform(target_grid)[0]
 
-    # return the min / max of target_grid
+    # return the min / max of target_grid if we exhauted max_iter
     if refine_grid:
         where_bad = (conf_pred_mask > 0.5).sum(-1) == 0
         # sets band to be edge of grid
         conf_pred_mask[where_bad,0] += 1.
         conf_pred_mask[where_bad,-1] += 1.
-        # print(x.stop)
 
     # convert conformal prediction mask to upper and lower bounds
     conf_pred_mask = conf_pred_mask.view(-1, *target_grid.shape)  # (num_inputs, num_grid_pts, tgt_dim
@@ -178,12 +177,6 @@ def construct_conformal_bands(model, inputs, alpha, temp=1e-6, max_iter=4):
         target_grid[mask > 0.5].min(0)[0] for mask in conf_pred_mask
     ]).cpu().view(-1)
 
-    # conf_ub = target_grid[conf_pred_mask > 0.5].max(-2)[0].cpu().view(-1)
-    # conf_lb = target_grid[conf_pred_mask > 0.5].min(-2)[0].cpu().view(-1)
-
-    # masked_targets = conf_pred_mask.to(target_grid).unsqueeze(-1) * target_grid
-    # conf_ub = masked_targets.max(-2)[0].cpu().view(-1)
-    # conf_lb = -1 * (-masked_targets).max(-2)[0].cpu().view(-1)
     return conf_lb, conf_ub
 
 
