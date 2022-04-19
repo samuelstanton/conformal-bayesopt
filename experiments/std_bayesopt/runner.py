@@ -54,22 +54,6 @@ def main(
     best_observed = {k: [] for k in keys}
     coverage = {k: [] for k in keys}
 
-    # best_observed_ei, best_observed_nei, best_observed_cei, best_observed_cnei, best_random = (
-    #     [],
-    #     [],
-    #     [],
-    #     [],
-    #     [],
-    # )
-    # best_observed_kg = []
-    # coverage_ei, coverage_nei, coverage_cei, coverage_cnei = (
-    #     [],
-    #     [],
-    #     [],
-    #     [],
-    # )
-    # coverage_kg = []
-
     train_yvar = torch.tensor(noise_se ** 2, device=device, dtype=dtype)
 
     # call helper functions to generate initial training data and initialize model
@@ -204,19 +188,7 @@ def main(
     output_dict = {
         "best_achieved": best_observed,
         "coverage": coverage,
-        "inputs": {k: x[0] for x in data_dict},
-        # "coverage": {
-        #     "ei": coverage_ei,
-        #     "nei": coverage_nei,
-        #     "cei": coverage_cei,
-        #     "cnei": coverage_cnei,            
-        # },
-        # "inputs": {
-        #     "ei": train_x_ei,
-        #     "nei": train_x_nei,
-        #     "cei": train_x_cei,
-        #     "cnei": train_x_cnei,
-        # }
+        "inputs": {k: data_dict[k][0] for k in keys},
     }
     return output_dict
 
