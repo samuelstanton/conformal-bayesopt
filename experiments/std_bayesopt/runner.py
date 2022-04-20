@@ -9,7 +9,7 @@ from botorch.acquisition.monte_carlo import (
 )
 from botorch.acquisition.knowledge_gradient import qKnowledgeGradient
 from botorch import fit_gpytorch_model
-from botorch.sampling.samplers import SobolQMCNormalSampler
+from botorch.sampling.samplers import SobolQMCNormalSampler, IIDNormalSampler
 
 from utils import (
     generate_initial_data,
@@ -18,8 +18,8 @@ from utils import (
     optimize_acqf_and_get_observation,
     update_random_observations,
     get_problem,
-    assess_coverage,
 )
+from experiments.std_bayesopt.helpers import assess_coverage
 from helpers import qConformalExpectedImprovement, qConformalNoisyExpectedImprovement
 from botorch.models.transforms import Standardize, Normalize
 
@@ -50,7 +50,7 @@ def main(
     bounds = torch.zeros_like(bb_fn.bounds)
     bounds[1] += 1.
 
-    keys = ["rnd", "ei", "nei", "kg", "cei", "cnei"]
+    keys = ["rnd", "ei", "nei", "kg", "cei"]
     best_observed = {k: [] for k in keys}
     coverage = {k: [] for k in keys}
 
@@ -110,6 +110,7 @@ def main(
 
             # now prepare the acquisition
             qmc_sampler = SobolQMCNormalSampler(num_samples=mc_samples)
+            # qmc_sampler = IIDNormalSampler(num_samples=mc_samples)
             if k == "ei":
                 acqf = qExpectedImprovement(
                     model=model,
@@ -173,12 +174,12 @@ def main(
             best_ei = best_observed["ei"][-1]
             best_nei = best_observed["nei"][-1]
             best_cei = best_observed["cei"][-1]
-            best_cnei = best_observed["cnei"][-1]
+            best_cnei = best_observed.get("cnei", [-float("inf")])[-1]
             best_kg = best_observed["kg"][-1]
             print(
-                f"\nBatch {iteration:>2}: best_value (random, qEI, qNEI, qconEI, qconNEI) = "
+                f"\nBatch {iteration:>2}: best_value (random, qEI, qNEI, qconEI, qconNEI, qKG) = "
                 f"({best_random:>4.2f}, {best_ei:>4.2f}, {best_nei:>4.2f}, {best_cei:>4.2f}, {best_cnei:>4.2f}), "
-                f"time = {t1-t0:>4.2f}.",
+                f"{best_kg:>4.2f}), time = {t1-t0:>4.2f}.",
                 end="",
             )
             # print("coverage", coverage)

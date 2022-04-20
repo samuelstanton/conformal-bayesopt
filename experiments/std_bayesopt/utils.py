@@ -4,13 +4,13 @@ import argparse
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.constraints import Interval
 from gpytorch.mlls import ExactMarginalLogLikelihood
-from botorch.models.transforms import Standardize, Normalize
 
+from botorch.models.transforms import Standardize, Normalize
 from botorch.test_functions import Branin, Levy, Ackley
 from botorch.optim import optimize_acqf
 
-from helpers import (
-    PassSampler, ConformalSingleTaskGP, generate_target_grid, conformal_gp_regression
+from experiments.std_bayesopt.helpers import (
+    ConformalSingleTaskGP
 )
 
 
@@ -106,6 +106,7 @@ def get_exact_model(
         model.likelihood.noise = yvar.item()
     return model
 
+
 def get_problem(problem, dim):
     if problem == "levy":
         return Levy(dim=dim, negate=True)
@@ -113,71 +114,6 @@ def get_problem(problem, dim):
         return Branin(negate=True)
     elif problem == "ackley":
         return Ackley(dim=dim, negate=True)
-
-
-def assess_coverage(model, inputs, targets, alpha=0.05, temp=1e-6, return_bounds=False):
-    targets = targets.squeeze(-1)
-
-    with torch.no_grad():
-        model.standard()
-        # TODO: fix coverage for alpha
-        conf_region = model.posterior(inputs, observation_noise=True).mvn.confidence_region()
-
-        std_coverage = ((targets > conf_region[0]) * (targets < conf_region[1])).float().sum() / targets.shape[0]
-
-        conformal_conf_region = construct_conformal_bands(model, inputs, alpha, temp)
-        conformal_conf_region = [cc.to(targets) for cc in conformal_conf_region]
-        conformal_coverage = (
-            (targets > conformal_conf_region[0]) * (targets < conformal_conf_region[1])
-        ).float().sum() / targets.shape[0]
-
-    model.train()
-    model.standard()
-    if return_bounds:
-        return conf_region, conformal_conf_region
-    return std_coverage.item(), conformal_coverage.item()
-
-
-def construct_conformal_bands(model, inputs, alpha, temp=1e-6, max_iter=4):
-    # generate conformal prediction mask
-    model.eval()
-    model.conformal()
-    grid_res = model.tgt_grid_res
-    assert grid_res >= 2
-    refine_grid = True
-    for i in range(max_iter):
-        print(i)
-        target_grid = generate_target_grid(model.conformal_bounds, grid_res).to(inputs)
-        conf_pred_mask, _ = conformal_gp_regression(model, inputs[:, None], target_grid, alpha, temp=temp)
-
-        # if prediction set has at least two elements, stop
-        if torch.all((conf_pred_mask > 0.5).float().sum(1) >= 2):
-            refine_grid = False
-        if not refine_grid:
-            break
-
-        grid_res *= 2
-
-    if hasattr(model, "outcome_transform"):
-        target_grid = model.outcome_transform.untransform(target_grid)[0]
-
-    # return the min / max of target_grid if we exhauted max_iter
-    if refine_grid:
-        where_bad = (conf_pred_mask > 0.5).sum(-1) == 0
-        # sets band to be edge of grid
-        conf_pred_mask[where_bad,0] += 1.
-        conf_pred_mask[where_bad,-1] += 1.
-
-    # convert conformal prediction mask to upper and lower bounds
-    conf_pred_mask = conf_pred_mask.view(-1, *target_grid.shape)  # (num_inputs, num_grid_pts, tgt_dim
-    conf_ub = torch.stack([
-        target_grid[mask > 0.5].max(0)[0] for mask in conf_pred_mask
-    ]).cpu().view(-1)
-    conf_lb = torch.stack([
-        target_grid[mask > 0.5].min(0)[0] for mask in conf_pred_mask
-    ]).cpu().view(-1)
-
-    return conf_lb, conf_ub
 
 
 def optimize_acqf_and_get_observation(
