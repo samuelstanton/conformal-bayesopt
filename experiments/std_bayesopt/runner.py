@@ -1,6 +1,7 @@
 from helpers import PassSampler
 import torch
 import time
+import math
 
 # from botorch.acquisition.objective import ConstrainedMCObjective
 from botorch.acquisition.monte_carlo import (
@@ -19,8 +20,9 @@ from utils import (
     update_random_observations,
     get_problem,
 )
-from experiments.std_bayesopt.helpers import assess_coverage
-from helpers import qConformalExpectedImprovement, qConformalNoisyExpectedImprovement
+from experiments.std_bayesopt.helpers import (
+    assess_coverage, qConformalExpectedImprovement, qConformalNoisyExpectedImprovement
+)
 from botorch.models.transforms import Standardize, Normalize
 
 def main(
@@ -37,7 +39,8 @@ def main(
     verbose: bool = True,
     output: str = None,
     problem: str = None,
-    alpha: float = 0.05,
+    min_alpha: float = 0.05,
+    max_grid_refinements: int = 4,
 ):
     dtype = torch.double if dtype == "double" else torch.float
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -66,12 +69,14 @@ def main(
     )
     heldout_x, heldout_obj, _ = generate_initial_data(10 * num_init, bb_fn, noise_se, device, dtype)
 
+    alpha = max(1. / math.sqrt(train_x_ei.size(-2)), min_alpha)
+
     mll_model_dict = {}
     data_dict = {}
     for k in keys:
         mll_and_model = initialize_model(
             train_x_ei, train_obj_ei, train_yvar,
-            method=method, alpha=alpha, tgt_grid_res=tgt_grid_res,
+            method=method, alpha=alpha, tgt_grid_res=tgt_grid_res, max_grid_refinements=max_grid_refinements
         )
         mll_model_dict[k] = (mll_and_model)
         best_observed[k].append(best_observed_value_ei)
@@ -152,17 +157,20 @@ def main(
             new_x, new_obj = optimize_acqf_and_get_observation(
                 acqf, **optimize_acqf_kwargs
             )
-            print(objective.max(), new_obj, k)
+            print(objective.max(), new_obj, k, alpha)
 
             inputs = torch.cat([inputs, new_x])
             objective = torch.cat([objective, new_obj])
 
             best_observed[k].append(objective.max().item())
             # prepare new model
+            alpha = max(1. / math.sqrt(inputs.size(-2)), min_alpha)
             mll, model, trans = initialize_model(
                 inputs,
                 objective,
                 method=method,
+                alpha=alpha,
+                tgt_grid_res=tgt_grid_res,
             )
             mll_model_dict[k] = (mll, model, trans)
             data_dict[k] = inputs, objective
@@ -174,7 +182,7 @@ def main(
             best_ei = best_observed["ei"][-1]
             best_nei = best_observed["nei"][-1]
             best_cei = best_observed["cei"][-1]
-            best_cnei = best_observed.get("cnei", [-float("inf")])[-1]
+            best_cnei = best_observed.get("cnei", [float("NaN")])[-1]
             best_kg = best_observed["kg"][-1]
             print(
                 f"\nBatch {iteration:>2}: best_value (random, qEI, qNEI, qconEI, qconNEI, qKG) = "
@@ -195,6 +203,7 @@ def main(
 
 
 if __name__ == "__main__":
-    args = parse()
-    output_dict = main(**vars(args))
+    with torch.autograd.set_detect_anomaly(True):
+        args = parse()
+        output_dict = main(**vars(args))
     torch.save({"pars": vars(args), "results": output_dict}, args.output)

@@ -24,9 +24,12 @@ def parse():
     parser.add_argument("--num_init", type=int, default=10)
     parser.add_argument("--mc_samples", type=int, default=256)
     parser.add_argument("--batch_size", type=int, default=3)
-    parser.add_argument("--alpha", type=float, default=0.05)
+    parser.add_argument("--min_alpha", type=float, default=0.05)
     parser.add_argument("--method", type=str, default="exact")
+    parser.add_argument("--tgt_grid_res", type=int, default=64)
+    parser.add_argument("--max_grid_refinements", type=int, default=4)
     return parser.parse_args()
+
 
 def generate_initial_data(
     n, fn, NOISE_SE, device, dtype, is_poisson=False
@@ -39,6 +42,7 @@ def generate_initial_data(
     best_observed_value = exact_obj.max().item()
     print(train_x.shape, train_obj.shape)
     return train_x, train_obj, best_observed_value
+
 
 def initialize_model(
     train_x,
@@ -74,6 +78,7 @@ def initialize_model(
         model_obj.load_state_dict(state_dict)
     return mll, model_obj, transform
 
+
 def update_random_observations(BATCH_SIZE, best_random, bounds, problem=lambda x: x, dim=6):
     """Simulates a random policy by taking a the current list of best values observed randomly,
     drawing a new random point, observing its value, and updating the list.
@@ -83,9 +88,10 @@ def update_random_observations(BATCH_SIZE, best_random, bounds, problem=lambda x
     best_random.append(max(best_random[-1], next_random_best))
     return best_random
 
+
 def get_exact_model(
     x, y, yvar, use_input_transform=True, use_outcome_transform=True, alpha=0.05,
-        tgt_grid_res=32, **kwargs
+        tgt_grid_res=64, max_grid_refinements=4, **kwargs
 ):
     conformal_bounds = torch.tensor([[-3., 3.]]).t() # this can be standardized w/o worry?
 
@@ -99,7 +105,8 @@ def get_exact_model(
         input_transform=Normalize(x.shape[-1]) if use_input_transform else None,
         alpha=alpha,
         conformal_bounds=conformal_bounds,
-        tgt_grid_res=tgt_grid_res
+        tgt_grid_res=tgt_grid_res,
+        max_grid_refinements=max_grid_refinements
     ).to(x)
     if yvar is not None:
         model.likelihood.raw_noise.detach_()
