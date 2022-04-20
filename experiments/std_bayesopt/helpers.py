@@ -74,7 +74,7 @@ def construct_conformal_bands(model, inputs, alpha, temp=1e-6, max_iter=4):
             refine_grid = False
 
         # if all grid elements are in prediction set, expand the grid
-        if torch.any((conf_pred_mask > 0.5).float().sum(1) == grid_res):
+        if torch.any(conf_pred_mask[:, 0] > 0.5) or torch.any(conf_pred_mask[:, -1] > 0.5):
             expand_grid = True
             cred_tail_prob *= alpha
         else:
@@ -135,13 +135,6 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-6,
         *[-1]*(test_inputs.ndim-2), target_grid.shape[1], -1, -1
     )
     expanded_targets = target_grid
-
-    # expanded_inputs = expanded_inputs.unsqueeze(-2)
-    # expanded_targets = target_grid.unsqueeze(-2)
-
-    # expanded_targets = target_grid.expand(*test_inputs.shape[:-1], -1, -1)
-    # the q batch and grid size are flipped
-    # expanded_targets = expanded_targets.transpose(-2, -3)
 
     updated_gps = gp.condition_on_observations(expanded_inputs, expanded_targets)
     
