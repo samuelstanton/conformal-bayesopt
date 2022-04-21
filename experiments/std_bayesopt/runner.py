@@ -186,7 +186,7 @@ def main(
             best_kg = best_observed["kg"][-1]
             print(
                 f"\nBatch {iteration:>2}: best_value (random, qEI, qNEI, qconEI, qconNEI, qKG) = "
-                f"({best_random:>4.2f}, {best_ei:>4.2f}, {best_nei:>4.2f}, {best_cei:>4.2f}, {best_cnei:>4.2f}), "
+                f"({best_random:>4.2f}, {best_ei:>4.2f}, {best_nei:>4.2f}, {best_cei:>4.2f}, {best_cnei:>4.2f}, "
                 f"{best_kg:>4.2f}), time = {t1-t0:>4.2f}.",
                 end="",
             )
