@@ -1,26 +1,39 @@
-import torch.nn.functional as F
 import numpy as np
 import torch
-import torch.nn as nn
 
 from botorch.acquisition import qExpectedImprovement, qNoisyExpectedImprovement
 from botorch.posteriors import Posterior
 from botorch.sampling import MCSampler
 from botorch.models import SingleTaskGP
 
-from gpytorch.lazy import DiagLazyTensor
-
 from scipy import stats
 
 import torchsort
 
+import types
 
-# def generate_target_grid(bounds, resolution):
-#     target_dim = bounds.shape[1]
-#     grid_coords = [np.linspace(bounds[0,i], bounds[1,i], resolution) for i in range(target_dim)]
-#     target_grid = np.stack(np.meshgrid(*grid_coords), axis=-1)
-#     target_grid = torch.tensor(target_grid).view(-1, target_dim)
-#     return target_grid.float()
+
+def conformalize_acq_fn(acq_fn_cls):
+    old_forward = acq_fn_cls.forward
+
+    def new_forward(self, X, *args, **kwargs):
+        old_model = self.model
+        target_grid, conf_pred_mask, conditioned_model, _, _ = construct_conformal_bands(
+            old_model, X, old_model.alpha, old_model.temp
+        )
+        conditioned_model.standard()
+        self.model = conditioned_model
+        res = old_forward(X.unsqueeze(-3), *args, **kwargs)
+        res = torch.trapezoid(
+            y=conf_pred_mask * res[..., None, None],
+            x=target_grid,
+            dim=-3
+        )
+        self.model = old_model
+        return res.view(-1)
+
+    acq_fn_cls.forward = types.MethodType(new_forward, acq_fn_cls)
+    return acq_fn_cls
 
 
 def generate_target_grid(y_mean, y_std, grid_res, alpha):
@@ -76,7 +89,7 @@ def construct_conformal_bands(model, inputs, alpha, temp=1e-6):
             new_center = new_center.squeeze(-3)  # (*q_batch_shape, q_batch_size, target_dim)
         if not torch.allclose(grid_center, new_center, rtol=1e-2):
             recenter_grid = True
-            diff_norm = torch.norm(grid_center - new_center).item() / (torch.norm(grid_center) + 1e-6).item()
+            # diff_norm = torch.norm(grid_center - new_center).item() / (torch.norm(grid_center) + 1e-6).item()
             # print(f'recentering grid, diff norm:{diff_norm:0.4f}')
             grid_center = new_center
         else:
@@ -115,14 +128,9 @@ def construct_conformal_bands(model, inputs, alpha, temp=1e-6):
     #     f"accepted ratio: {accepted_ratios.mean().item():0.2f}"
     # )
 
-    # if hasattr(model, "outcome_transform"):
-    #     target_grid = model.outcome_transform.untransform(target_grid)[0]
-
     # TODO improve error handling for case when max_iter is exhausted
-    try:
-        assert torch.all((conf_pred_mask > 0.5).float().sum(1) >= 2)
-    except:
-        import pdb; pdb.set_trace()
+    if torch.any((conf_pred_mask > 0.5).float().sum(1) < 2):
+        raise RuntimeError("not enough grid points accepted")
     # return the min / max of target_grid
     # if refine_grid:
     #     where_bad = (conf_pred_mask > 0.5).sum(1) == 0
@@ -348,7 +356,7 @@ class PassSampler(MCSampler):
 
 class ConformalSingleTaskGP(SingleTaskGP):
     def __init__(self, conformal_bounds, alpha, tgt_grid_res, ratio_estimator=None,
-                 max_grid_refinements=4, *args, **kwargs) -> None:
+                 max_grid_refinements=4, temp=1e-2, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.conformal_bounds = conformal_bounds
         self.alpha = alpha
@@ -356,6 +364,7 @@ class ConformalSingleTaskGP(SingleTaskGP):
         self.tgt_grid_res = tgt_grid_res
         self.ratio_estimator = ratio_estimator
         self.max_grid_refinements = max_grid_refinements
+        self.temp = temp
     
     def conformal(self):
         self.is_conformal = True

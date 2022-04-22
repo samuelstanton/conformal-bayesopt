@@ -101,8 +101,10 @@ def get_exact_model(
         likelihood=GaussianLikelihood(noise_constraint=Interval(5e-4, 0.2))
         if yvar is None
         else None,
-        outcome_transform=Standardize(y.shape[-1]) if use_outcome_transform else None,
-        input_transform=Normalize(x.shape[-1]) if use_input_transform else None,
+        # outcome_transform=Standardize(y.shape[-1]) if use_outcome_transform else None,
+        # input_transform=Normalize(x.shape[-1]) if use_input_transform else None,
+        outcome_transform=None,
+        input_transform=None,
         alpha=alpha,
         conformal_bounds=conformal_bounds,
         tgt_grid_res=tgt_grid_res,

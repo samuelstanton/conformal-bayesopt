@@ -12,7 +12,7 @@ from botorch.acquisition.knowledge_gradient import qKnowledgeGradient
 from botorch import fit_gpytorch_model
 from botorch.sampling.samplers import SobolQMCNormalSampler, IIDNormalSampler
 
-from utils import (
+from experiments.std_bayesopt.utils import (
     generate_initial_data,
     initialize_model,
     parse,
