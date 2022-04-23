@@ -10,31 +10,6 @@ from scipy import stats
 
 import torchsort
 
-import types
-
-
-def conformalize_acq_fn(acq_fn_cls):
-    old_forward = acq_fn_cls.forward
-
-    def new_forward(self, X, *args, **kwargs):
-        old_model = self.model
-        target_grid, conf_pred_mask, conditioned_model, _, _ = construct_conformal_bands(
-            old_model, X, old_model.alpha, old_model.temp
-        )
-        conditioned_model.standard()
-        self.model = conditioned_model
-        res = old_forward(X.unsqueeze(-3), *args, **kwargs)
-        res = torch.trapezoid(
-            y=conf_pred_mask * res[..., None, None],
-            x=target_grid,
-            dim=-3
-        )
-        self.model = old_model
-        return res.view(-1)
-
-    acq_fn_cls.forward = types.MethodType(new_forward, acq_fn_cls)
-    return acq_fn_cls
-
 
 def generate_target_grid(y_mean, y_std, grid_res, alpha):
     """
@@ -270,32 +245,32 @@ def assess_coverage(model, inputs, targets, alpha=0.05, temp=1e-6):
     return std_coverage.item(), conformal_coverage.item()
 
 
-# TODO: write a sub-class for these
-class qConformalExpectedImprovement(qExpectedImprovement):
-    def forward(self, X):
-        """
-        :param X: (*batch_shape, q, d)
-        :return: (*batch_shape)
-        """
-        unconformalized_acqf = super().forward(X)  # batch x grid
-
-        res = torch.trapezoid(
-            y=self.model.conf_pred_mask * unconformalized_acqf[..., None, None],
-            x=self.model.conf_tgt_grid,
-            dim=-3
-        )
-        return res.view(-1)
-
-
-class qConformalNoisyExpectedImprovement(qNoisyExpectedImprovement):
-    def forward(self, X):
-        unconformalized_acqf = super().forward(X)  # batch x grid
-        res = torch.trapezoid(
-            y=self.model.conf_pred_mask * unconformalized_acqf[..., None, None],
-            x=self.model.conf_tgt_grid,
-            dim=-3
-        )
-        return res.view(-1)
+# # TODO: write a sub-class for these
+# class qConformalExpectedImprovement(qExpectedImprovement):
+#     def forward(self, X):
+#         """
+#         :param X: (*batch_shape, q, d)
+#         :return: (*batch_shape)
+#         """
+#         unconformalized_acqf = super().forward(X)  # batch x grid
+#
+#         res = torch.trapezoid(
+#             y=self.model.conf_pred_mask * unconformalized_acqf[..., None, None],
+#             x=self.model.conf_tgt_grid,
+#             dim=-3
+#         )
+#         return res.view(-1)
+#
+#
+# class qConformalNoisyExpectedImprovement(qNoisyExpectedImprovement):
+#     def forward(self, X):
+#         unconformalized_acqf = super().forward(X)  # batch x grid
+#         res = torch.trapezoid(
+#             y=self.model.conf_pred_mask * unconformalized_acqf[..., None, None],
+#             x=self.model.conf_tgt_grid,
+#             dim=-3
+#         )
+#         return res.view(-1)
 
 
 class ConformalPosterior(Posterior):

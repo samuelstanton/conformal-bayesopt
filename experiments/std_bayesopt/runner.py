@@ -7,6 +7,7 @@ import math
 from botorch.acquisition.monte_carlo import (
     qExpectedImprovement,
     qNoisyExpectedImprovement,
+    qUpperConfidenceBound,
 )
 from botorch.acquisition.knowledge_gradient import qKnowledgeGradient
 from botorch import fit_gpytorch_model
@@ -20,10 +21,10 @@ from experiments.std_bayesopt.utils import (
     update_random_observations,
     get_problem,
 )
-from experiments.std_bayesopt.helpers import (
-    assess_coverage, qConformalExpectedImprovement, qConformalNoisyExpectedImprovement
-)
+from experiments.std_bayesopt.helpers import assess_coverage
+from experiments.std_bayesopt.acquisitions import *
 from botorch.models.transforms import Standardize, Normalize
+
 
 def main(
     seed: int = 0,
@@ -53,7 +54,7 @@ def main(
     bounds = torch.zeros_like(bb_fn.bounds)
     bounds[1] += 1.
 
-    keys = ["rnd", "ei", "nei", "kg", "cei"]
+    keys = ["rnd", "ei", "nei", "ucb", "cei", "cnei", "cucb"]
     best_observed = {k: [] for k in keys}
     coverage = {k: [] for k in keys}
 
@@ -114,44 +115,60 @@ def main(
             print(coverage[k][-1], k)
 
             # now prepare the acquisition
-            qmc_sampler = SobolQMCNormalSampler(num_samples=mc_samples)
-            # qmc_sampler = IIDNormalSampler(num_samples=mc_samples)
+            # qmc_sampler = SobolQMCNormalSampler(num_samples=mc_samples)
+            iid_sampler = IIDNormalSampler(num_samples=mc_samples)
             if k == "ei":
                 acqf = qExpectedImprovement(
                     model=model,
                     best_f=(t_objective).max(),
-                   sampler=qmc_sampler,
+                   sampler=iid_sampler,
                 )
             elif k == "nei":
                 acqf = qNoisyExpectedImprovement(
                     model=model,
                     X_baseline=inputs,
-                    sampler=qmc_sampler,
+                    sampler=iid_sampler,
+                )
+            elif k == "ucb":
+                acqf = qUpperConfidenceBound(
+                    model=model,
+                    beta=0.1,
                 )
             elif k == "kg":
                 acqf = qKnowledgeGradient(
                     model=model,
                     current_value=t_objective.max(),
                     num_fantasies=None,
-                    sampler=qmc_sampler,
+                    sampler=iid_sampler,
                 )
             elif k == "cei":
-                model.conformal()
-                acqf = qConformalExpectedImprovement(
+                acqf = qExpectedImprovement(
                     model=model,
                     best_f=(t_objective).max(),
-                    sampler=PassSampler(mc_samples),
+                    sampler=iid_sampler,
                 )
-                acqf.objective._verify_output_shape = False
+                acqf = conformalize_acq_fn(acqf)
             elif k == "cnei":
-                model.conformal()
-                acqf = qConformalNoisyExpectedImprovement(
+                acqf = qNoisyExpectedImprovement(
                     model=model,
                     X_baseline=inputs,
-                    sampler=PassSampler(mc_samples),
-                    cache_root=False,
+                    sampler=iid_sampler,
                 )
-                acqf.objective._verify_output_shape = False
+                acqf = conformalize_acq_fn(acqf)
+            elif k == "cucb":
+                acqf = qUpperConfidenceBound(
+                    model=model,
+                    beta=0.1,
+                )
+                acqf = conformalize_acq_fn(acqf)
+            elif k == "ckg":
+                acqf = qKnowledgeGradient(
+                    model=model,
+                    current_value=t_objective.max(),
+                    num_fantasies=None,
+                    sampler=iid_sampler,
+                )
+                acqf = conformalize_acq_fn(acqf)
         
             # optimize acquisition
             new_x, new_obj = optimize_acqf_and_get_observation(
@@ -177,22 +194,12 @@ def main(
 
         t1 = time.time()
 
+        best = {
+            key: val[-1] for key, val in best_observed.items()
+        }
         if verbose:
-            best_random = best_observed["rnd"][-1]
-            best_ei = best_observed["ei"][-1]
-            best_nei = best_observed["nei"][-1]
-            best_cei = best_observed["cei"][-1]
-            best_cnei = best_observed.get("cnei", [float("NaN")])[-1]
-            best_kg = best_observed["kg"][-1]
-            print(
-                f"\nBatch {iteration:>2}: best_value (random, qEI, qNEI, qconEI, qconNEI, qKG) = "
-                f"({best_random:>4.2f}, {best_ei:>4.2f}, {best_nei:>4.2f}, {best_cei:>4.2f}, {best_cnei:>4.2f}, "
-                f"{best_kg:>4.2f}), time = {t1-t0:>4.2f}.",
-                end="",
-            )
-            # print("coverage", coverage)
-        else:
-            print(".", end="")
+            print(f"\nBatch {iteration:>2}, time = {t1-t0:>4.2f}, best values:")
+            [print(f"{key}: {val:0.2f}") for key, val in best.items()]
 
     output_dict = {
         "best_achieved": best_observed,
