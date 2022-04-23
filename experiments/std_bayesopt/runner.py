@@ -11,7 +11,7 @@ from botorch.acquisition.knowledge_gradient import qKnowledgeGradient
 from botorch import fit_gpytorch_model
 from botorch.sampling.samplers import IIDNormalSampler
 
-from experiments.std_bayesopt.utils import (
+from utils import (
     generate_initial_data,
     initialize_model,
     parse,
@@ -19,8 +19,8 @@ from experiments.std_bayesopt.utils import (
     update_random_observations,
     get_problem,
 )
-from experiments.std_bayesopt.helpers import assess_coverage
-from experiments.std_bayesopt.acquisitions import *
+from helpers import assess_coverage
+from acquisitions import *
 
 
 def main(
@@ -49,34 +49,39 @@ def main(
     bb_fn = bb_fn.to(device, dtype)
     # we manually optimize in [0,1]^d
     bounds = torch.zeros_like(bb_fn.bounds)
-    bounds[1] += 1.
+    bounds[1] += 1.0
 
     keys = ["rnd", "ei", "nei", "ucb", "cei", "cnei", "cucb"]
     best_observed = {k: [] for k in keys}
     coverage = {k: [] for k in keys}
 
-    train_yvar = torch.tensor(noise_se ** 2, device=device, dtype=dtype)
+    train_yvar = torch.tensor(noise_se**2, device=device, dtype=dtype)
 
     # call helper functions to generate initial training data and initialize model
     (
         train_x_ei,
         train_obj_ei,
         best_observed_value_ei,
-    ) = generate_initial_data(
-        num_init, bb_fn, noise_se, device, dtype
+    ) = generate_initial_data(num_init, bb_fn, noise_se, device, dtype)
+    heldout_x, heldout_obj, _ = generate_initial_data(
+        10 * num_init, bb_fn, noise_se, device, dtype
     )
-    heldout_x, heldout_obj, _ = generate_initial_data(10 * num_init, bb_fn, noise_se, device, dtype)
 
-    alpha = max(1. / math.sqrt(train_x_ei.size(-2)), min_alpha)
+    alpha = max(1.0 / math.sqrt(train_x_ei.size(-2)), min_alpha)
 
     mll_model_dict = {}
     data_dict = {}
     for k in keys:
         mll_and_model = initialize_model(
-            train_x_ei, train_obj_ei, train_yvar,
-            method=method, alpha=alpha, tgt_grid_res=tgt_grid_res, max_grid_refinements=max_grid_refinements
+            train_x_ei,
+            train_obj_ei,
+            train_yvar,
+            method=method,
+            alpha=alpha,
+            tgt_grid_res=tgt_grid_res,
+            max_grid_refinements=max_grid_refinements,
         )
-        mll_model_dict[k] = (mll_and_model)
+        mll_model_dict[k] = mll_and_model
         best_observed[k].append(best_observed_value_ei)
         data_dict[k] = (train_x_ei, train_obj_ei)
 
@@ -94,7 +99,9 @@ def main(
 
             if k == "rnd":
                 # update random
-                best_observed[k] = update_random_observations(batch_size, best_observed[k], bb_fn.bounds, bb_fn, dim=bounds.shape[1])
+                best_observed[k] = update_random_observations(
+                    batch_size, best_observed[k], bb_fn.bounds, bb_fn, dim=bounds.shape[1]
+                )
                 continue
 
             # fit the model
@@ -108,7 +115,9 @@ def main(
 
             # now assess coverage on the heldout set
             # TODO: update the heldout sets
-            coverage[k].append(assess_coverage(model, heldout_x, trans(heldout_obj)[0], alpha))
+            coverage[k].append(
+                assess_coverage(model, heldout_x, trans(heldout_obj)[0], alpha)
+            )
             print(coverage[k][-1], k)
 
             # now prepare the acquisition
@@ -118,7 +127,7 @@ def main(
                 acqf = qExpectedImprovement(
                     model=model,
                     best_f=(t_objective).max(),
-                   sampler=iid_sampler,
+                    sampler=iid_sampler,
                 )
             elif k == "nei":
                 acqf = qNoisyExpectedImprovement(
@@ -166,7 +175,7 @@ def main(
                     sampler=iid_sampler,
                 )
                 acqf = conformalize_acq_fn(acqf)
-        
+
             # optimize acquisition
             new_x, new_obj = optimize_acqf_and_get_observation(
                 acqf, **optimize_acqf_kwargs
@@ -177,7 +186,7 @@ def main(
 
             best_observed[k].append(objective.max().item())
             # prepare new model
-            alpha = max(1. / math.sqrt(inputs.size(-2)), min_alpha)
+            alpha = max(1.0 / math.sqrt(inputs.size(-2)), min_alpha)
             mll, model, trans = initialize_model(
                 inputs,
                 objective,
@@ -190,9 +199,7 @@ def main(
 
         t1 = time.time()
 
-        best = {
-            key: val[-1] for key, val in best_observed.items()
-        }
+        best = {key: val[-1] for key, val in best_observed.items()}
         if verbose:
             print(f"\nBatch {iteration:>2}, time = {t1-t0:>4.2f}, best values:")
             [print(f"{key}: {val:0.2f}") for key, val in best.items()]

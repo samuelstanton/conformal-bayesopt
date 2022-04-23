@@ -9,9 +9,7 @@ from botorch.models.transforms import Standardize, Normalize
 from botorch.test_functions import Branin, Levy, Ackley
 from botorch.optim import optimize_acqf
 
-from experiments.std_bayesopt.helpers import (
-    ConformalSingleTaskGP
-)
+from helpers import ConformalSingleTaskGP
 
 
 def parse():
@@ -31,12 +29,14 @@ def parse():
     return parser.parse_args()
 
 
-def generate_initial_data(
-    n, fn, NOISE_SE, device, dtype, is_poisson=False
-):
+def generate_initial_data(n, fn, NOISE_SE, device, dtype, is_poisson=False):
     # generate training data
-    train_x = torch.rand(n, fn.dim, device=device, dtype=dtype)# * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]
-    exact_obj = fn(train_x * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]).unsqueeze(-1)  # add output dimension
+    train_x = torch.rand(
+        n, fn.dim, device=device, dtype=dtype
+    )  # * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]
+    exact_obj = fn(train_x * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]).unsqueeze(
+        -1
+    )  # add output dimension
     # exact_con = outcome_constraint(train_x).unsqueeze(-1)  # add output dimension
     train_obj = exact_obj + NOISE_SE * torch.randn_like(exact_obj)
     best_observed_value = exact_obj.max().item()
@@ -79,7 +79,9 @@ def initialize_model(
     return mll, model_obj, transform
 
 
-def update_random_observations(BATCH_SIZE, best_random, bounds, problem=lambda x: x, dim=6):
+def update_random_observations(
+    BATCH_SIZE, best_random, bounds, problem=lambda x: x, dim=6
+):
     """Simulates a random policy by taking a the current list of best values observed randomly,
     drawing a new random point, observing its value, and updating the list.
     """
@@ -90,10 +92,19 @@ def update_random_observations(BATCH_SIZE, best_random, bounds, problem=lambda x
 
 
 def get_exact_model(
-    x, y, yvar, use_input_transform=True, use_outcome_transform=True, alpha=0.05,
-        tgt_grid_res=64, max_grid_refinements=4, **kwargs
+    x,
+    y,
+    yvar,
+    use_input_transform=True,
+    use_outcome_transform=True,
+    alpha=0.05,
+    tgt_grid_res=64,
+    max_grid_refinements=4,
+    **kwargs
 ):
-    conformal_bounds = torch.tensor([[-3., 3.]]).t() # this can be standardized w/o worry?
+    conformal_bounds = torch.tensor(
+        [[-3.0, 3.0]]
+    ).t()  # this can be standardized w/o worry?
 
     model = ConformalSingleTaskGP(
         train_X=x,
@@ -108,7 +119,7 @@ def get_exact_model(
         alpha=alpha,
         conformal_bounds=conformal_bounds,
         tgt_grid_res=tgt_grid_res,
-        max_grid_refinements=max_grid_refinements
+        max_grid_refinements=max_grid_refinements,
     ).to(x)
     if yvar is not None:
         model.likelihood.raw_noise.detach_()
@@ -151,7 +162,9 @@ def optimize_acqf_and_get_observation(
     )
     # observe new values
     new_x = candidates.detach()
-    exact_obj = fn(new_x * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]).unsqueeze(-1)  # add output dimension
+    exact_obj = fn(new_x * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]).unsqueeze(
+        -1
+    )  # add output dimension
 
     new_obj = exact_obj + noise_se * torch.randn_like(exact_obj)
     return new_x, new_obj
