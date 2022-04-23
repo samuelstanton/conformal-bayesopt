@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 
-from botorch.acquisition import qExpectedImprovement, qNoisyExpectedImprovement
 from botorch.posteriors import Posterior
 from botorch.sampling import MCSampler
 from botorch.models import SingleTaskGP
@@ -39,8 +38,8 @@ def construct_conformal_bands(model, inputs, alpha, temp=1e-6):
     model.standard()
     with torch.no_grad():
         y_post = model.posterior(inputs, observation_noise=True)
-        y_mean = y_post.mvn.mean[..., None]
-        y_std = y_post.mvn.variance.sqrt()[..., None]
+        y_mean = y_post.mean[..., None]
+        y_std = y_post.variance.sqrt()[..., None]
 
     grid_res = model.tgt_grid_res
     grid_center = y_mean
@@ -49,7 +48,6 @@ def construct_conformal_bands(model, inputs, alpha, temp=1e-6):
     cred_tail_prob = alpha
 
     for refine_step in range(1, model.max_grid_refinements + 1):
-        # target_grid = generate_target_grid(model.conformal_bounds, grid_res).to(inputs)
         target_grid = generate_target_grid(grid_center, grid_scale, grid_res, alpha=cred_tail_prob)
         conf_pred_mask, conditioned_gps, q_conf_scores = conformal_gp_regression(
             model, inputs, target_grid, alpha, temp=temp
@@ -64,8 +62,6 @@ def construct_conformal_bands(model, inputs, alpha, temp=1e-6):
             new_center = new_center.squeeze(-3)  # (*q_batch_shape, q_batch_size, target_dim)
         if not torch.allclose(grid_center, new_center, rtol=1e-2):
             recenter_grid = True
-            # diff_norm = torch.norm(grid_center - new_center).item() / (torch.norm(grid_center) + 1e-6).item()
-            # print(f'recentering grid, diff norm:{diff_norm:0.4f}')
             grid_center = new_center
         else:
             recenter_grid = False
@@ -84,9 +80,7 @@ def construct_conformal_bands(model, inputs, alpha, temp=1e-6):
         if torch.any(conf_pred_mask[:, 0] > 0.5) or torch.any(conf_pred_mask[:, -1] > 0.5)\
                 or torch.any(too_many_accepted):
             expand_grid = True
-            # cred_tail_prob *= alpha
             grid_scale *= 2
-            # print('expanding grid width')
         else:
             expand_grid = False
 
@@ -106,13 +100,6 @@ def construct_conformal_bands(model, inputs, alpha, temp=1e-6):
     # TODO improve error handling for case when max_iter is exhausted
     if torch.any((conf_pred_mask > 0.5).float().sum(1) < 2):
         raise RuntimeError("not enough grid points accepted")
-    # return the min / max of target_grid
-    # if refine_grid:
-    #     where_bad = (conf_pred_mask > 0.5).sum(1) == 0
-    #     # sets band to be edge of grid
-    #     conf_pred_mask[where_bad, 0] += 1.
-    #     conf_pred_mask[where_bad, -1] += 1.
-    #     # print(x.stop)
 
     # convert conformal prediction mask to upper and lower bounds
     conf_pred_mask = conf_pred_mask.view(*target_grid.shape)  # (num_inputs, num_grid_pts, tgt_dim)
@@ -171,12 +158,7 @@ def conformal_gp_regression(gp, test_inputs, target_grid, alpha, temp=1e-6,
         train_inputs = updated_gps.input_transform.untransform(train_inputs)
     if hasattr(updated_gps, 'output_transform'):
         train_labels = updated_gps.output_transform.untransform(train_labels)
-
-    # lik_train_train_covar = updated_gps.prediction_strategy.lik_train_train_covar
-    # prior_mean = updated_gps.prediction_strategy.train_prior_dist.mean.unsqueeze(-1)
-    # prior_covar = updated_gps.prediction_strategy.train_prior_dist.lazy_covariance_matrix
-    # noise = updated_gps.likelihood.noise
-    
+   
     # compute conformal scores (pointwise posterior predictive log-likelihood)
     # TODO extend to target_dim > 1 case
     if target_dim > 1:
@@ -226,8 +208,8 @@ def assess_coverage(model, inputs, targets, alpha=0.05, temp=1e-6):
 
     with torch.no_grad():
         y_post = model.posterior(inputs, observation_noise=True)
-        y_mean = y_post.mvn.mean
-        y_std = y_post.mvn.variance.sqrt()
+        y_mean = y_post.mean
+        y_std = y_post.variance.sqrt()
         std_scale = stats.norm.ppf(1 - alpha / 2.)
         cred_lb = y_mean - std_scale * y_std
         cred_ub = y_mean + std_scale * y_std
@@ -243,35 +225,6 @@ def assess_coverage(model, inputs, targets, alpha=0.05, temp=1e-6):
     model.standard()
 
     return std_coverage.item(), conformal_coverage.item()
-
-
-# # TODO: write a sub-class for these
-# class qConformalExpectedImprovement(qExpectedImprovement):
-#     def forward(self, X):
-#         """
-#         :param X: (*batch_shape, q, d)
-#         :return: (*batch_shape)
-#         """
-#         unconformalized_acqf = super().forward(X)  # batch x grid
-#
-#         res = torch.trapezoid(
-#             y=self.model.conf_pred_mask * unconformalized_acqf[..., None, None],
-#             x=self.model.conf_tgt_grid,
-#             dim=-3
-#         )
-#         return res.view(-1)
-#
-#
-# class qConformalNoisyExpectedImprovement(qNoisyExpectedImprovement):
-#     def forward(self, X):
-#         unconformalized_acqf = super().forward(X)  # batch x grid
-#         res = torch.trapezoid(
-#             y=self.model.conf_pred_mask * unconformalized_acqf[..., None, None],
-#             x=self.model.conf_tgt_grid,
-#             dim=-3
-#         )
-#         return res.view(-1)
-
 
 class ConformalPosterior(Posterior):
     def __init__(self, X, gp, target_bounds, alpha, tgt_grid_res, ratio_estimator=None,
@@ -298,13 +251,6 @@ class ConformalPosterior(Posterior):
         return self.X.shape[:-2] + torch.Size([1])
     
     def rsample(self, sample_shape=(), base_samples=None):
-        # target_grid = generate_target_grid(self.target_bounds, self.tgt_grid_res)
-        # target_grid = target_grid.to(self.X)
-        # # for later on in the evaluation
-        # self.gp.conf_tgt_grid = target_grid.squeeze(-1)
-        # self.gp.conf_pred_mask, conditioned_gps = conformal_gp_regression(
-        #     self.gp, self.X, target_grid, self.alpha, ratio_estimator=self.ratio_estimator
-        # )
         target_grid, conf_pred_mask, conditioned_gps, _, _ = construct_conformal_bands(
             self.gp, self.X, self.alpha, self.temp
         )

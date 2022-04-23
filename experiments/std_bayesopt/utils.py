@@ -138,43 +138,6 @@ def optimize_acqf_and_get_observation(
     sequential=False,
 ):
     """Optimizes the acquisition function, and returns a new candidate and a noisy observation."""
-    # from botorch.optim.initializers import initialize_q_batch_nonneg
-    # Xraw = bounds[0] + (bounds[1] - bounds[0]) * torch.rand(
-    #         RAW_SAMPLES, BATCH_SIZE, bounds.shape[1]).to(bounds)
-    # Yraw = acq_func(Xraw)
-    # X = initialize_q_batch_nonneg(Xraw, Yraw, NUM_RESTARTS)
-    # X.detach_().requires_grad_(True)
-
-    # # set up the optimizer, make sure to only pass in the candidate set here
-    # optimizer = torch.optim.Adam([X], lr=0.001)
-    # X_traj = []  # we'll store the results
-    # 
-    # # run a basic optimization loop
-    # for i in range(500):
-    #     optimizer.zero_grad()
-    #     # this performs batch evaluation, so this is an N-dim tensor
-    #     losses = - acq_func(X)  # torch.optim minimizes
-    #     loss = losses.sum()
-    #     # print("loss:", loss, X.norm()) 
-    #     loss.backward()  # perform backward pass
-    #     # print(X.grad.norm(), "grad is")
-    #     if not torch.isfinite(X.grad.norm()):
-    #         X.stop
-    #     optimizer.step()
-    #     # clamp values to the feasible set
-    #     for j, (lb, ub) in enumerate(zip(*bounds)):
-    #         X.data[..., j].clamp_(lb, ub) # need to do this on the data not X itself
-    # 
-    #     # store the optimization trajecatory
-    #     X_traj.append(X.detach().clone())
-    # 
-    #     if (i + 1) % 15 == 0:
-    #         print(f"Iteration {i+1:>3}/75 - Loss: {loss.item():>4.3f} Grad norm: {X.grad.norm().item():>4.3f}")
-    # with torch.no_grad():
-    #     final_acqf = acq_func(X)
-    #     best_ind = final_acqf.max(0)[1]
-    #     candidates = X[best_ind].detach().clone()
-    # # candidates = X.detach().clone()
 
     # optimize
     candidates, _ = optimize_acqf(

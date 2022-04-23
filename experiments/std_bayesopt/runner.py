@@ -1,9 +1,7 @@
-from helpers import PassSampler
 import torch
 import time
 import math
 
-# from botorch.acquisition.objective import ConstrainedMCObjective
 from botorch.acquisition.monte_carlo import (
     qExpectedImprovement,
     qNoisyExpectedImprovement,
@@ -11,7 +9,7 @@ from botorch.acquisition.monte_carlo import (
 )
 from botorch.acquisition.knowledge_gradient import qKnowledgeGradient
 from botorch import fit_gpytorch_model
-from botorch.sampling.samplers import SobolQMCNormalSampler, IIDNormalSampler
+from botorch.sampling.samplers import IIDNormalSampler
 
 from experiments.std_bayesopt.utils import (
     generate_initial_data,
@@ -23,7 +21,6 @@ from experiments.std_bayesopt.utils import (
 )
 from experiments.std_bayesopt.helpers import assess_coverage
 from experiments.std_bayesopt.acquisitions import *
-from botorch.models.transforms import Standardize, Normalize
 
 
 def main(
@@ -50,7 +47,7 @@ def main(
 
     bb_fn = get_problem(problem, dim)
     bb_fn = bb_fn.to(device, dtype)
-    # bounds = torch.stack((torch.zeros(bb_fn.dim), torch.ones(bb_fn.dim)).to(device, dtype)
+    # we manually optimize in [0,1]^d
     bounds = torch.zeros_like(bb_fn.bounds)
     bounds[1] += 1.
 
@@ -115,7 +112,7 @@ def main(
             print(coverage[k][-1], k)
 
             # now prepare the acquisition
-            # qmc_sampler = SobolQMCNormalSampler(num_samples=mc_samples)
+            # TODO: check to see if we want to move to QMC eventually
             iid_sampler = IIDNormalSampler(num_samples=mc_samples)
             if k == "ei":
                 acqf = qExpectedImprovement(
@@ -174,7 +171,6 @@ def main(
             new_x, new_obj = optimize_acqf_and_get_observation(
                 acqf, **optimize_acqf_kwargs
             )
-            print(objective.max(), new_obj, k, alpha)
 
             inputs = torch.cat([inputs, new_x])
             objective = torch.cat([objective, new_obj])
