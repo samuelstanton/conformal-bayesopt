@@ -2,7 +2,6 @@ import types
 import torch
 
 from experiments.std_bayesopt.helpers import (
-    # ConformalSingleTaskGP,
     construct_conformal_bands,
     conf_mask_to_bounds,
     sample_grid_points,
@@ -34,11 +33,6 @@ def conformalize_acq_fn(acq_obj, alpha, temp, grid_res, max_grid_refinements, ra
         shape_msg = "inputs should have shape (*q_batch_shape, q_batch_size, input_dim)" \
                     f"instead has shape {X.shape}"
         assert X.ndim >= 3, shape_msg
-
-        # if not isinstance(self.model, ConformalSingleTaskGP):
-        #     raise NotImplementedError(
-        #         "Conformalized acquisitions can only be used with ConformalSingleTaskGP."
-        #     )
 
         old_model = self.model
         q_batch_size = X.size(-2)

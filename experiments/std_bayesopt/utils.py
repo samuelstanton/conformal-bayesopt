@@ -10,8 +10,6 @@ from botorch.models import SingleTaskGP
 from botorch.test_functions import Branin, Levy, Ackley
 from botorch.optim import optimize_acqf
 
-# from helpers import ConformalSingleTaskGP
-
 
 def parse():
     parser = argparse.ArgumentParser()
@@ -97,17 +95,8 @@ def get_exact_model(
     x,
     y,
     yvar,
-    use_input_transform=True,
-    use_outcome_transform=True,
-    alpha=0.05,
-    tgt_grid_res=64,
-    max_grid_refinements=4,
     **kwargs
 ):
-    conformal_bounds = torch.tensor(
-        [[-3.0, 3.0]]
-    ).t()  # this can be standardized w/o worry?
-
     model = SingleTaskGP(
         train_X=x,
         train_Y=y,
@@ -116,21 +105,6 @@ def get_exact_model(
         input_transform=None,
     )
 
-    # model = ConformalSingleTaskGP(
-    #     train_X=x,
-    #     train_Y=y,
-    #     likelihood=GaussianLikelihood(noise_constraint=Interval(5e-4, 0.2))
-    #     if yvar is None
-    #     else None,
-    #     # outcome_transform=Standardize(y.shape[-1]) if use_outcome_transform else None,
-    #     # input_transform=Normalize(x.shape[-1]) if use_input_transform else None,
-    #     outcome_transform=None,
-    #     input_transform=None,
-    #     alpha=alpha,
-    #     conformal_bounds=conformal_bounds,
-    #     tgt_grid_res=tgt_grid_res,
-    #     max_grid_refinements=max_grid_refinements,
-    # ).to(x)
     if yvar is not None:
         model.likelihood.raw_noise.detach_()
         model.likelihood.noise = yvar.item()

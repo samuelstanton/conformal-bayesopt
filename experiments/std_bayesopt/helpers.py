@@ -1,10 +1,6 @@
 import numpy as np
 import torch
 
-from botorch.posteriors import Posterior
-from botorch.sampling import MCSampler
-from botorch.models import SingleTaskGP
-
 from scipy import stats
 
 import torchsort
@@ -112,7 +108,6 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
 
     # initialize target grid with pointwise credible sets
     model.eval()
-    # model.standard()
     with torch.no_grad():
         y_post = model.posterior(inputs, observation_noise=True)
         y_mean = y_post.mean
@@ -121,8 +116,6 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     # setup
     grid_center = y_mean
     grid_scale = y_std
-    # cred_tail_prob = np.full(y_mean.shape, alpha)
-    # cred_tail_prob = alpha
     conditioned_models = None
 
     # construct target grid, conformal prediction mask
@@ -161,7 +154,6 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         if torch.any(too_few_accepted):
             refine_grid = True
             grid_res *= 2
-            # print('increasing grid resolution')
         else:
             refine_grid = False
 
@@ -218,8 +210,6 @@ def conformal_gp_regression(
     gp.conf_pred_mask = (
         None  # without this line the deepcopy in `gp.condition_on_observations` fails
     )
-    # code smell reminder:
-    # gp.conformal()  # fix for BoTorch acq fn batch shape checks
 
     # retraining: condition the GP at every target grid point for every test input
     expanded_inputs = test_inputs.unsqueeze(-3).expand(
@@ -248,7 +238,6 @@ def conformal_gp_regression(
     # TODO extend to target_dim > 1 case
     if target_dim > 1:
         raise NotImplementedError
-    # updated_gps.standard()
 
     posterior = updated_gps.posterior(train_inputs, observation_noise=True)
     pred_dist = torch.distributions.Normal(posterior.mean, posterior.variance.sqrt())
@@ -305,10 +294,7 @@ def assess_coverage(
         std_coverage: float
         conformal_coverage: float
     """
-    # targets = targets.squeeze(-1)
     model.eval()
-    # model.standard()
-
     with torch.no_grad():
         y_post = model.posterior(inputs, observation_noise=True)
         y_mean = y_post.mean
@@ -316,8 +302,6 @@ def assess_coverage(
         std_scale = stats.norm.ppf(1 - alpha / 2.0)
         cred_lb = y_mean - std_scale * y_std
         cred_ub = y_mean + std_scale * y_std
-        # cred_lb = cred_lb.squeeze()
-        # cred_ub = cred_ub.squeeze()
 
         std_coverage = (
             (targets > cred_lb) * (targets < cred_ub)
@@ -335,122 +319,4 @@ def assess_coverage(
             (targets > conf_lb) * (targets < conf_ub)
         ).float().mean()
 
-    # model.standard()
-
     return std_coverage.item(), conformal_coverage.item()
-
-
-# class ConformalPosterior(Posterior):
-#     def __init__(
-#         self,
-#         X,
-#         gp,
-#         target_bounds,
-#         alpha,
-#         tgt_grid_res,
-#         ratio_estimator=None,
-#         temp=1e-2,
-#         max_grid_refinements=4,
-#     ):
-#         self.gp = gp
-#         self.X = X
-#         self.target_bounds = target_bounds
-#         self.tgt_grid_res = tgt_grid_res
-#         self.alpha = alpha
-#         self.ratio_estimator = ratio_estimator
-#         self.temp = temp
-#         self.max_grid_refinements = max_grid_refinements
-#
-#     @property
-#     def device(self):
-#         return self.X.shape
-#
-#     @property
-#     def dtype(self):
-#         return self.X.shape
-#
-#     @property
-#     def event_shape(self):
-#         return self.X.shape[:-2] + torch.Size([1])
-#
-#     def rsample(self, sample_shape=(), base_samples=None):
-#         target_grid, conf_pred_mask, conditioned_gps = construct_conformal_bands(
-#             self.gp, self.X, self.alpha, self.temp
-#         )
-#         self.gp.conf_tgt_grid = target_grid
-#         self.gp.conf_pred_mask = conf_pred_mask
-#
-#         conditioned_gps.standard()
-#         reshaped_x = self.X[:, None].expand(-1, target_grid.size(-3), -1, -1)
-#         posteriors = conditioned_gps.posterior(reshaped_x)
-#
-#         out = posteriors.rsample(sample_shape, base_samples)
-#         return out
-#
-#
-# class PassSampler(MCSampler):
-#     def __init__(self, num_samples):
-#         super().__init__(batch_range=(0, -2))
-#         self._sample_shape = torch.Size([num_samples])
-#         self.collapse_batch_dims = True
-#
-#     def _construct_base_samples(self, posterior, shape):
-#         pass
-#
-#
-# class ConformalSingleTaskGP(SingleTaskGP):
-#     def __init__(
-#         self,
-#         conformal_bounds,
-#         alpha,
-#         tgt_grid_res,
-#         ratio_estimator=None,
-#         max_grid_refinements=4,
-#         temp=1e-2,
-#         *args,
-#         **kwargs
-#     ) -> None:
-#         super().__init__(*args, **kwargs)
-#         self.conformal_bounds = conformal_bounds
-#         self.alpha = alpha
-#         self.is_conformal = False
-#         self.tgt_grid_res = tgt_grid_res
-#         self.ratio_estimator = ratio_estimator
-#         self.max_grid_refinements = max_grid_refinements
-#         self.temp = temp
-#
-#     def conformal(self):
-#         self.is_conformal = True
-#
-#     def standard(self):
-#         self.is_conformal = False
-#
-#     def posterior(self, X, observation_noise=False, posterior_transform=None):
-#         if self.is_conformal:
-#             posterior = ConformalPosterior(
-#                 X,
-#                 self,
-#                 self.conformal_bounds,
-#                 alpha=self.alpha,
-#                 tgt_grid_res=self.tgt_grid_res,
-#                 ratio_estimator=self.ratio_estimator,
-#                 max_grid_refinements=self.max_grid_refinements,
-#             )
-#             if hasattr(self, "outcome_transform"):
-#                 posterior = self.outcome_transform.untransform_posterior(posterior)
-#             return posterior
-#         else:
-#             return super().posterior(
-#                 X=X,
-#                 observation_noise=observation_noise,
-#                 posterior_transform=posterior_transform,
-#             )
-#
-#     @property
-#     def batch_shape(self):
-#         if self.is_conformal:
-#             try:
-#                 return self.conf_pred_mask.shape[:-2]
-#             except:
-#                 pass
-#         return self.train_inputs[0].shape[:-2]
