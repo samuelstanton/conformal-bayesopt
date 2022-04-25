@@ -6,10 +6,11 @@ from gpytorch.constraints import Interval
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
 from botorch.models.transforms import Standardize, Normalize
+from botorch.models import SingleTaskGP
 from botorch.test_functions import Branin, Levy, Ackley
 from botorch.optim import optimize_acqf
 
-from helpers import ConformalSingleTaskGP
+# from helpers import ConformalSingleTaskGP
 
 
 def parse():
@@ -25,6 +26,7 @@ def parse():
     parser.add_argument("--min_alpha", type=float, default=0.05)
     parser.add_argument("--method", type=str, default="exact")
     parser.add_argument("--tgt_grid_res", type=int, default=64)
+    parser.add_argument("--temp", type=float, default=1e-2)
     parser.add_argument("--max_grid_refinements", type=int, default=4)
     return parser.parse_args()
 
@@ -106,21 +108,29 @@ def get_exact_model(
         [[-3.0, 3.0]]
     ).t()  # this can be standardized w/o worry?
 
-    model = ConformalSingleTaskGP(
+    model = SingleTaskGP(
         train_X=x,
         train_Y=y,
-        likelihood=GaussianLikelihood(noise_constraint=Interval(5e-4, 0.2))
-        if yvar is None
-        else None,
-        # outcome_transform=Standardize(y.shape[-1]) if use_outcome_transform else None,
-        # input_transform=Normalize(x.shape[-1]) if use_input_transform else None,
+        likelihood=GaussianLikelihood(noise_constraint=Interval(5e-4, 0.2)),
         outcome_transform=None,
         input_transform=None,
-        alpha=alpha,
-        conformal_bounds=conformal_bounds,
-        tgt_grid_res=tgt_grid_res,
-        max_grid_refinements=max_grid_refinements,
-    ).to(x)
+    )
+
+    # model = ConformalSingleTaskGP(
+    #     train_X=x,
+    #     train_Y=y,
+    #     likelihood=GaussianLikelihood(noise_constraint=Interval(5e-4, 0.2))
+    #     if yvar is None
+    #     else None,
+    #     # outcome_transform=Standardize(y.shape[-1]) if use_outcome_transform else None,
+    #     # input_transform=Normalize(x.shape[-1]) if use_input_transform else None,
+    #     outcome_transform=None,
+    #     input_transform=None,
+    #     alpha=alpha,
+    #     conformal_bounds=conformal_bounds,
+    #     tgt_grid_res=tgt_grid_res,
+    #     max_grid_refinements=max_grid_refinements,
+    # ).to(x)
     if yvar is not None:
         model.likelihood.raw_noise.detach_()
         model.likelihood.noise = yvar.item()

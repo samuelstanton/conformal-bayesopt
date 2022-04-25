@@ -1,3 +1,5 @@
+import random
+import numpy as np
 import torch
 import time
 import math
@@ -30,6 +32,7 @@ def main(
     batch_size: int = 3,
     n_batch: int = 50,
     tgt_grid_res: int = 64,
+    temp: float = 1e-2,
     mc_samples: int = 256,
     num_init: int = 10,
     noise_se: float = 0.1,
@@ -43,6 +46,8 @@ def main(
     dtype = torch.double if dtype == "double" else torch.float
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    random.seed(seed)
+    np.random.seed(seed)
     torch.random.manual_seed(seed)
 
     bb_fn = get_problem(problem, dim)
@@ -51,7 +56,7 @@ def main(
     bounds = torch.zeros_like(bb_fn.bounds)
     bounds[1] += 1.0
 
-    keys = ["rnd", "ei", "nei", "ucb", "cei", "cnei", "cucb"]
+    keys = ["rnd", "ei", "nei", "kg",  "cei", "cnei", "ckg"]
     best_observed = {k: [] for k in keys}
     coverage = {k: [] for k in keys}
 
@@ -113,14 +118,24 @@ def main(
             fit_gpytorch_model(mll)
             model.requires_grad_(False)
 
+            rx_estimator = None
+            conformal_kwargs = dict(
+                alpha=alpha,
+                grid_res=tgt_grid_res,
+                max_grid_refinements=max_grid_refinements,
+                ratio_estimator=rx_estimator
+            )
+
             # now assess coverage on the heldout set
             # TODO: update the heldout sets
+            conformal_kwargs['temp'] = 1e-6  # set temp to low value when evaluating coverage
             coverage[k].append(
-                assess_coverage(model, heldout_x, trans(heldout_obj)[0], alpha)
+                assess_coverage(model, heldout_x, trans(heldout_obj)[0], **conformal_kwargs)
             )
             print(coverage[k][-1], k)
 
             # now prepare the acquisition
+            conformal_kwargs['temp'] = temp
             # TODO: check to see if we want to move to QMC eventually
             iid_sampler = IIDNormalSampler(num_samples=mc_samples)
             if k == "ei":
@@ -153,20 +168,20 @@ def main(
                     best_f=(t_objective).max(),
                     sampler=iid_sampler,
                 )
-                acqf = conformalize_acq_fn(acqf)
+                acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
             elif k == "cnei":
                 acqf = qNoisyExpectedImprovement(
                     model=model,
                     X_baseline=inputs,
                     sampler=iid_sampler,
                 )
-                acqf = conformalize_acq_fn(acqf)
+                acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
             elif k == "cucb":
                 acqf = qUpperConfidenceBound(
                     model=model,
                     beta=0.1,
                 )
-                acqf = conformalize_acq_fn(acqf)
+                acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
             elif k == "ckg":
                 acqf = qKnowledgeGradient(
                     model=model,
@@ -174,7 +189,7 @@ def main(
                     num_fantasies=None,
                     sampler=iid_sampler,
                 )
-                acqf = conformalize_acq_fn(acqf)
+                acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
 
             # optimize acquisition
             new_x, new_obj = optimize_acqf_and_get_observation(
