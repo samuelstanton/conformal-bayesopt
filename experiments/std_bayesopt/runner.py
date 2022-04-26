@@ -56,7 +56,7 @@ def main(
     bounds = torch.zeros_like(bb_fn.bounds)
     bounds[1] += 1.0
 
-    keys = ["rnd", "ei", "nei", "kg",  "cei", "cnei", "ckg"]
+    keys = ["cei", "cnei", "ckg", "rnd", "ei", "nei", "kg"]
     best_observed = {k: [] for k in keys}
     coverage = {k: [] for k in keys}
 

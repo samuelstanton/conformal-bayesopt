@@ -117,9 +117,8 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     grid_center = y_mean
     grid_scale = y_std
     conditioned_models = None
-
-    # construct target grid, conformal prediction mask
     for refine_step in range(0, max_grid_refinements + 1):
+        # construct target grid, conformal prediction mask
         target_grid = generate_target_grid(
             grid_center, grid_scale, grid_res, tail_prob=alpha / 4.
         )
@@ -127,43 +126,45 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
             model, inputs, target_grid, alpha, temp=temp
         )
         # TODO revisit for target_dim > 1
-        # reshape to (*q_batch_shape, grid_res, q_batch_size, target_dim)
+        # reshape to (*q_batch_shape, q_batch_size, grid_res, 1, target_dim)
         conf_pred_mask = conf_pred_mask.unsqueeze(-1)  # create target dim
-        accepted_ratios = (conf_pred_mask >= 0.5).float().mean(-3)
+        q_conf_scores = q_conf_scores.unsqueeze(-1)  # create target dim
 
         # center target grid around best scoring point in current grid
         with torch.no_grad():
             q_score_argmax = q_conf_scores.argmax(
-                dim=-2, keepdim=True
-            )  # (*q_batch_shape, q_batch_size, 1, 1)
+                dim=-3, keepdim=True
+            )  # (*q_batch_shape, q_batch_size, 1, 1, 1)
             new_center = torch.gather(
-                target_grid, dim=-3, index=q_score_argmax[..., None]
+                target_grid, dim=-3, index=q_score_argmax
             )
             new_center = new_center.squeeze(
                 -3
-            )  # (*q_batch_shape, q_batch_size, target_dim)
-
+            )  # (*q_batch_shape, q_batch_size, 1, target_dim)
         if not torch.allclose(grid_center, new_center, rtol=1e-2):
             recenter_grid = True
+            assert grid_center.size() == new_center.size()
             grid_center = new_center
         else:
             recenter_grid = False
 
-        # check if grid resolution should be increased
-        too_few_accepted = (accepted_ratios < 0.2)
+        # if fewer than two points have been accepted, increase grid resolution
+        num_accepted = (conf_pred_mask >= 0.5).float().sum(-3)
+        too_few_accepted = (num_accepted < 2)
         if torch.any(too_few_accepted):
             refine_grid = True
             grid_res *= 2
         else:
             refine_grid = False
 
-        # if too many/all grid elements are in prediction set, expand the grid
+        # if too many/all grid elements are in prediction set, expand the grid bounds
         grid_lb_accepted = (conf_pred_mask[..., 0, :, :] >= 0.5)
         grid_ub_accepted = (conf_pred_mask[..., -1, :, :] >= 0.5)
-        too_many_accepted = (accepted_ratios > 0.8)
+        too_many_accepted = (num_accepted / grid_res > 0.8)
         should_expand = grid_lb_accepted + grid_ub_accepted + too_many_accepted
         if torch.any(should_expand):
             expand_grid = True
+            assert grid_scale.size() == should_expand.size()
             grid_scale += (grid_scale * should_expand.float())
         else:
             expand_grid = False
@@ -178,12 +179,12 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     #     f"conformal step: {refine_step},",
     #     f"grid resolution: {grid_res},",
     #     f"tail_prob: {cred_tail_prob:0.4f},",
-    #     f"accepted ratio: {accepted_ratios.mean().item():0.2f}"
+    #     f"accepted ratio: {num_accepted.mean().item():0.2f}"
     # )
 
     # TODO improve error handling for case when max_iter is exhausted
     # if this error is raised, its a good indication of a bug somewhere else
-    if torch.any((conf_pred_mask >= 0.5).float().sum(-3) < 2):
+    if torch.any(num_accepted < 2):
         raise RuntimeError("not enough grid points accepted")
 
     return target_grid, conf_pred_mask, conditioned_models
@@ -207,9 +208,9 @@ def conformal_gp_regression(
     q_batch_shape = test_inputs.shape[:-2]
 
     gp.eval()
-    gp.conf_pred_mask = (
-        None  # without this line the deepcopy in `gp.condition_on_observations` fails
-    )
+    # gp.conf_pred_mask = (
+    #     None  # without this line the deepcopy in `gp.condition_on_observations` fails
+    # )
 
     # retraining: condition the GP at every target grid point for every test input
     expanded_inputs = test_inputs.unsqueeze(-3).expand(
@@ -249,7 +250,7 @@ def conformal_gp_regression(
     ranks_by_score = torchsort.soft_rank(
         conf_scores.flatten(0, -2),
         regularization="l2",
-        regularization_strength=0.1,
+        regularization_strength=temp,
     ).view(
         *original_shape
     )  # (num_q_batches, grid_size, num_total)
@@ -276,6 +277,10 @@ def conformal_gp_regression(
         -2
     )  # (*q_batch_shape, grid_size, q_batch_size)
     conf_pred_mask = torch.sigmoid((cum_weights - alpha) / temp)
+
+    # num_accepted = (conf_pred_mask >= 0.5).float().sum(-2)
+    # if torch.any(num_accepted < 2):
+    #     import pdb; pdb.set_trace()
 
     return conf_pred_mask, updated_gps, q_conf_scores
 
