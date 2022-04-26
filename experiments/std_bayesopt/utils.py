@@ -127,8 +127,8 @@ def optimize_acqf_and_get_observation(
     fn,
     outcome_constraint=None,
     noise_se=0.0,
-    NUM_RESTARTS=10,
-    RAW_SAMPLES=512,
+    NUM_RESTARTS=5,
+    RAW_SAMPLES=128,
     is_poisson=False,
     sequential=False,
 ):
