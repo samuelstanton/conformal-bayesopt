@@ -35,14 +35,14 @@ def conf_mask_to_bounds(target_grid, conf_pred_mask):
     Convert dense pointwise target grid and corresponding conformal mask
     to pointwise conformal prediction intervals.
     Args:
-        target_grid: (*q_batch_shape, q_batch_size, grid_res, 1, target_dim)
-        conf_pred_mask: (*q_batch_shape, q_batch_size, grid_res, 1, target_dim)
+        target_grid: (*q_batch_shape, grid_res, q_batch_size, target_dim)
+        conf_pred_mask: (*q_batch_shape, grid_res, q_batch_size, target_dim)
     Returns:
         conf_lb: (*q_batch_shape, q_batch_size, target_dim)
         conf_ub: (*q_batch_shape, q_batch_size, target_dim)
     """
-    out_batch_shape = target_grid.shape[:-3]
-    target_dim = target_grid.size(-1)
+    out_shape = target_grid.shape[:-3] + target_grid.shape[-2:]
+    # target_dim = target_grid.size(-1)
     flat_tgt_grid = target_grid.flatten(0, -4)
     flat_pred_mask = conf_pred_mask.flatten(0, -4)
     conf_ub = (
@@ -61,8 +61,8 @@ def conf_mask_to_bounds(target_grid, conf_pred_mask):
             ]
         )
     )
-    conf_lb = conf_lb.view(*out_batch_shape, target_dim)
-    conf_ub = conf_ub.view(*out_batch_shape, target_dim)
+    conf_lb = conf_lb.view(*out_shape)
+    conf_ub = conf_ub.view(*out_shape)
 
     return conf_lb, conf_ub
 
@@ -107,9 +107,10 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
                 f"instead has shape {inputs.shape}"
     assert inputs.ndim >= 3, shape_msg
     assert grid_res >= 2, "grid resolution must be at least 2"
+    q_batch_size = inputs.size(-2)
 
     # dummy q-batch dimension
-    inputs = inputs.unsqueeze(-2)
+    # inputs = inputs.unsqueeze(-2)
 
     # initialize target grid with pointwise credible sets
     model.eval()
@@ -130,6 +131,7 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
 
         sampler = SobolQMCNormalSampler(grid_res)
         target_grid = sampler(y_post)
+        assert target_grid.size(0) == grid_res
         target_grid = torch.movedim(target_grid, 0, -3)
 
         conf_pred_mask, conditioned_models, q_conf_scores = conformal_gp_regression(
@@ -144,11 +146,15 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
 
         # center target grid around best scoring point in current grid
         with torch.no_grad():
-            q_score_argmax = q_conf_scores.argmax(
+            avg_score = q_conf_scores.mean(dim=-2, keepdim=True)
+            avg_score_argmax = avg_score.argmax(
                 dim=-3, keepdim=True
-            )  # (*q_batch_shape, q_batch_size, 1, 1, 1)
+            )  # (*q_batch_shape, 1, 1, 1)
+            avg_score_argmax = avg_score_argmax.expand(
+                *[-1] * (avg_score.ndim - 2), q_batch_size, -1
+            )  # (*q_batch_shape, 1, q_batch_size, 1)
             new_center = torch.gather(
-                target_grid, dim=-3, index=q_score_argmax
+                target_grid, dim=-3, index=avg_score_argmax
             )
             new_center = new_center.squeeze(
                 -3
@@ -161,11 +167,15 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         covar_scale = covar_scale.unsqueeze(-1)
 
         grid_center = y_post.mvn.mean
+
+        # import pdb;
+        # pdb.set_trace()
+
         assert grid_center.size() == new_center.size()
         recenter_grid = False
-        if not torch.allclose(grid_center, new_center, rtol=1e-2):
-            recenter_grid = True
-            grid_center = new_center.contiguous()
+        # if not torch.allclose(grid_center, new_center, rtol=1e-2):
+        #     recenter_grid = True
+        #     grid_center = new_center.contiguous()
 
         # if fewer than two points have been accepted, increase grid resolution
         # too_few_accepted = ()
@@ -210,6 +220,7 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     # TODO improve error handling for case when max_iter is exhausted
     # if this error is raised, it's a good indication of a bug somewhere else
     if torch.any(num_accepted < 2):
+        import pdb; pdb.set_trace()
         raise RuntimeError("not enough grid points accepted")
 
     return target_grid, conf_pred_mask, conditioned_models
