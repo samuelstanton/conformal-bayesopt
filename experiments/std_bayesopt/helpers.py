@@ -160,12 +160,12 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         # if too many/all grid elements are in prediction set, expand the grid bounds
         grid_lb_accepted = (conf_pred_mask[..., 0, :, :] >= 0.5)
         grid_ub_accepted = (conf_pred_mask[..., -1, :, :] >= 0.5)
-        too_many_accepted = (num_accepted / grid_res > 0.8)
+        too_many_accepted = (num_accepted > grid_res - 2)
         should_expand = grid_lb_accepted + grid_ub_accepted + too_many_accepted
         if torch.any(should_expand):
             expand_grid = True
             assert grid_scale.size() == should_expand.size()
-            grid_scale += (grid_scale * should_expand.float())
+            grid_scale += (grid_scale * num_accepted.float() / grid_res)
         else:
             expand_grid = False
 
