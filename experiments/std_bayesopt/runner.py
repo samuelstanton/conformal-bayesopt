@@ -186,8 +186,8 @@ def main(
                 acqf = qKnowledgeGradient(
                     model=model,
                     current_value=t_objective.max(),
-                    num_fantasies=None,
-                    sampler=iid_sampler,
+                    num_fantasies=64,
+                    # sampler=iid_sampler,
                 )
                 acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
 

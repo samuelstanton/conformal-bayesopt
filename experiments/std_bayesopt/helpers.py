@@ -4,6 +4,7 @@ import torch
 from scipy import stats
 
 from gpytorch.distributions import MultivariateNormal
+from gpytorch import lazify
 
 from botorch.sampling import SobolQMCNormalSampler
 from botorch.posteriors import GPyTorchPosterior
@@ -123,16 +124,19 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     # grid_center = y_mean
     # grid_scale = y_std
     conditioned_models = None
+    sampler = SobolQMCNormalSampler(grid_res)
     for refine_step in range(0, max_grid_refinements + 1):
         # construct target grid, conformal prediction mask
         # target_grid = generate_target_grid(
         #     grid_center, grid_scale, grid_res, tail_prob=alpha / 4.
         # )
 
-        sampler = SobolQMCNormalSampler(grid_res)
+        # sampler = SobolQMCNormalSampler(grid_res)
+        sampler._sample_shape = torch.Size([grid_res])
         target_grid = sampler(y_post)
         assert target_grid.size(0) == grid_res
         target_grid = torch.movedim(target_grid, 0, -3)
+        # print(target_grid.shape, refine_step, grid_res)
 
         conf_pred_mask, conditioned_models, q_conf_scores = conformal_gp_regression(
             model, inputs, target_grid, alpha, temp=temp
@@ -162,7 +166,8 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
 
         # TODO revisit when target_dim > 1, replace squeeze with movedim
         new_center = new_center.squeeze(-1)
-        covar_scale = (1. + num_accepted.float() / grid_res).pow(2).squeeze(-1)
+        # covar_scale = (1. + 3. * (grid_res - num_accepted.float()) / grid_res).pow(2).squeeze(-1)
+        covar_scale = (1. + num_accepted.float() / grid_res).pow(2.).squeeze(-1)
         # covariance matrix has extra last dimension (*batch_shape, n, n)
         covar_scale = covar_scale.unsqueeze(-1)
 
@@ -184,12 +189,6 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
             refine_grid = True
             grid_res *= 2
 
-        # if too many/all grid elements are in prediction set, expand the grid bounds
-        # grid_lb_accepted = (conf_pred_mask[..., 0, :, :] >= 0.5)
-        # grid_ub_accepted = (conf_pred_mask[..., -1, :, :] >= 0.5)
-        # too_many_accepted = (num_accepted > grid_res - 2)
-        # should_expand = grid_lb_accepted + grid_ub_accepted + too_many_accepted
-
         # warning! evaluating bc of weird GPyTorch lazy tensor broadcasting bug
         grid_covar = y_post.mvn.lazy_covariance_matrix.evaluate().contiguous()
         expand_grid = False
@@ -201,9 +200,9 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
 
         if recenter_grid or expand_grid:
             y_post = GPyTorchPosterior(
-                MultivariateNormal(grid_center, grid_covar)
+                MultivariateNormal(grid_center, lazify(grid_covar))
             )
-
+        # print(expand_grid, refine_grid, "expand and refine", torch.any(num_accepted < 2), torch.any(num_accepted > grid_res - 2))
         if not any([recenter_grid, refine_grid, expand_grid]):
             break
 
@@ -219,9 +218,9 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
 
     # TODO improve error handling for case when max_iter is exhausted
     # if this error is raised, it's a good indication of a bug somewhere else
-    if torch.any(num_accepted < 2):
-        import pdb; pdb.set_trace()
-        raise RuntimeError("not enough grid points accepted")
+    # if torch.any(num_accepted < 2):
+    #     import pdb; pdb.set_trace()
+    #     raise RuntimeError("not enough grid points accepted")
 
     return target_grid, conf_pred_mask, conditioned_models
 
@@ -314,9 +313,10 @@ def conformal_gp_regression(
     )  # (*q_batch_shape, grid_size, q_batch_size)
     conf_pred_mask = torch.sigmoid((cum_weights - alpha) / temp)
 
-    # num_accepted = (conf_pred_mask >= 0.5).float().sum(-2)
-    # if torch.any(num_accepted < 2):
-    #     import pdb; pdb.set_trace()
+    num_accepted = (conf_pred_mask >= 0.5).float().sum(-2)
+    # print(target_grid.shape)
+    if torch.any(num_accepted < 2) and target_grid.shape[1] == 2048:
+        import pdb; pdb.set_trace()
 
     return conf_pred_mask, updated_gps, q_conf_scores
 

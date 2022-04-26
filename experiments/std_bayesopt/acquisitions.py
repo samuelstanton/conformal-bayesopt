@@ -1,7 +1,7 @@
 import types
 import torch
 
-from experiments.std_bayesopt.helpers import (
+from helpers import (
     construct_conformal_bands,
     conf_mask_to_bounds,
     sample_grid_points,
@@ -78,7 +78,8 @@ def conformalize_acq_fn(acq_obj, alpha, temp, grid_res, max_grid_refinements, ra
         # evaluate outer integral
         # TODO remove when batch conformal scores are implemented
         conf_pred_mask = conf_pred_mask.prod(dim=-2, keepdim=True)
-        weights = conf_pred_mask / conf_pred_mask.sum(-3, keepdim=True)
+        # added epsilon due to removal of conf_pred_mask summation check
+        weights = conf_pred_mask / (conf_pred_mask.sum(-3, keepdim=True) + 1e-6)
         res = (weights * res[..., None, None]).sum(-3)
 
         # if q_batch_size == 1:
