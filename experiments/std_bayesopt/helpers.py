@@ -352,12 +352,16 @@ def assess_coverage(
             model, inputs[:, None], alpha, temp, grid_res,
             max_grid_refinements, ratio_estimator
         )
-        conf_lb, conf_ub = conf_mask_to_bounds(target_grid, conf_pred_mask)
-        conf_lb = conf_lb.squeeze(-2).to(targets)
-        conf_ub = conf_ub.squeeze(-2).to(targets)
-
-        conformal_coverage = (
-            (targets > conf_lb) * (targets < conf_ub)
-        ).float().mean()
+        try:
+            conf_lb, conf_ub = conf_mask_to_bounds(target_grid, conf_pred_mask)
+            conf_lb = conf_lb.squeeze(-2).to(targets)
+            conf_ub = conf_ub.squeeze(-2).to(targets)
+    
+            conformal_coverage = (
+                (targets > conf_lb) * (targets < conf_ub)
+            ).float().mean()
+        except:
+            print("Warning heldout set coverage evaluation failed. Returning nan")
+            conformal_coverage = torch.tensor(float('nan'))
 
     return std_coverage.item(), conformal_coverage.item()
