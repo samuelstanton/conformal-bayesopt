@@ -1,7 +1,7 @@
 import types
 import torch
 
-from helpers import (
+from experiments.std_bayesopt.helpers import (
     construct_conformal_bands,
     conf_mask_to_bounds,
     sample_grid_points,

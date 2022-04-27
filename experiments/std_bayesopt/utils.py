@@ -34,7 +34,9 @@ def generate_initial_data(n, fn, NOISE_SE, device, dtype, is_poisson=False):
     train_x = torch.rand(
         n, fn.dim, device=device, dtype=dtype
     )  # * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]
-    exact_obj = fn(train_x * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]).unsqueeze(
+    cube_loc = fn.bounds[0]
+    cube_scale = fn.bounds[1] - fn.bounds[0]
+    exact_obj = fn(train_x * cube_scale + cube_loc).unsqueeze(
         -1
     )  # add output dimension
     # exact_con = outcome_constraint(train_x).unsqueeze(-1)  # add output dimension
@@ -100,7 +102,7 @@ def get_exact_model(
     model = SingleTaskGP(
         train_X=x,
         train_Y=y,
-        likelihood=GaussianLikelihood(noise_constraint=Interval(5e-4, 0.2)),
+        likelihood=GaussianLikelihood(noise_constraint=Interval(1e-2, 0.2)),
         outcome_transform=None,
         input_transform=None,
     )
@@ -146,9 +148,11 @@ def optimize_acqf_and_get_observation(
     )
     # observe new values
     new_x = candidates.detach()
-    exact_obj = fn(new_x * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]).unsqueeze(
+    cube_loc = fn.bounds[0]
+    cube_scale = fn.bounds[1] - fn.bounds[0]
+    exact_obj = fn(new_x * cube_scale + cube_loc).unsqueeze(
         -1
     )  # add output dimension
 
-    new_obj = exact_obj + noise_se * torch.randn_like(exact_obj)
-    return new_x, new_obj
+    observed_obj = exact_obj + noise_se * torch.randn_like(exact_obj)
+    return new_x, observed_obj, exact_obj
