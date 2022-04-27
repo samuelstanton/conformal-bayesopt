@@ -12,7 +12,7 @@ from botorch.acquisition.monte_carlo import (
 )
 from botorch.acquisition.knowledge_gradient import qKnowledgeGradient
 from botorch import fit_gpytorch_model
-from botorch.sampling.samplers import IIDNormalSampler
+from botorch.sampling.samplers import IIDNormalSampler, SobolQMCNormalSampler
 
 from utils import (
     generate_initial_data,
@@ -24,6 +24,8 @@ from utils import (
 )
 from helpers import assess_coverage
 from acquisitions import *
+
+from lambo.utils import DataSplit, update_splits
 
 
 def main(
@@ -55,9 +57,10 @@ def main(
     bb_fn = bb_fn.to(device, dtype)
     # we manually optimize in [0,1]^d
     bounds = torch.zeros_like(bb_fn.bounds)
-    bounds[1] += 1.0
+    bounds[1] += 1.
+    print(f"function: {problem}, x bounds: {bounds}")
 
-    keys = ["cei", "cnei", "ckg", "rnd", "ei", "nei", "kg"]
+    keys = ["cei", "cnei", "cucb", "rnd", "ei", "nei", "ucb"]
     best_observed = {k: [] for k in keys}
     coverage = {k: [] for k in keys}
 
@@ -69,27 +72,35 @@ def main(
         train_obj_ei,
         best_observed_value_ei,
     ) = generate_initial_data(num_init, bb_fn, noise_se, device, dtype)
-    heldout_x, heldout_obj, _ = generate_initial_data(
-        10 * num_init, bb_fn, noise_se, device, dtype
+    new_split = DataSplit(
+        train_x_ei.cpu().numpy(), train_obj_ei.cpu().numpy()
     )
+    train_split, val_split, test_split = update_splits(
+        train_split=DataSplit(),
+        val_split=DataSplit(),
+        test_split=DataSplit(),
+        new_split=new_split,
+        holdout_ratio=0.2
+    )
+    train_inputs = torch.tensor(train_split[0], device=device)
+    train_targets = torch.tensor(train_split[1], device=device)
 
-    alpha = max(1.0 / math.sqrt(train_x_ei.size(-2)), min_alpha)
+    # heldout_x, heldout_obj, _ = generate_initial_data(
+    #     10 * num_init, bb_fn, noise_se, device, dtype
+    # )
 
-    mll_model_dict = {}
+    # mll_model_dict = {}
     data_dict = {}
     for k in keys:
         mll_and_model = initialize_model(
-            train_x_ei,
-            train_obj_ei,
+            train_inputs,
+            train_targets,
             train_yvar,
             method=method,
-            alpha=alpha,
-            tgt_grid_res=tgt_grid_res,
-            max_grid_refinements=max_grid_refinements,
         )
-        mll_model_dict[k] = mll_and_model
+        # mll_model_dict[k] = mll_and_model
         best_observed[k].append(best_observed_value_ei)
-        data_dict[k] = (train_x_ei, train_obj_ei)
+        data_dict[k] = (train_split, val_split, test_split)
 
     optimize_acqf_kwargs = {
         "bounds": bounds,
@@ -114,15 +125,25 @@ def main(
                 )
                 continue
 
-            # fit the model
-            mll, model, trans = mll_model_dict[k]
-            inputs, objective = data_dict[k]
-            trans.eval()
-            t_objective = trans(objective)[0]
+            # get the data
+            train_split, val_split, test_split = data_dict[k]
+            # print(f'{train_split[0].shape[0]} train, {val_split[0].shape[0]} val, {test_split[0].shape[0]} test')
+            train_inputs = torch.tensor(train_split[0], device=device)
+            train_targets = torch.tensor(train_split[1], device=device)
+
+            # prepare new model
+            mll, model, trans = initialize_model(
+                train_inputs,
+                train_targets,
+                method=method,
+            )
+            # mll_model_dict[k] = (mll, model, trans)
+
             model.requires_grad_(True)
             fit_gpytorch_model(mll)
             model.requires_grad_(False)
 
+            alpha = max(1.0 / math.sqrt(train_inputs.size(-2)), min_alpha)
             rx_estimator = None
             conformal_kwargs = dict(
                 alpha=alpha,
@@ -134,30 +155,44 @@ def main(
             torch.cuda.empty_cache()
 
             # now assess coverage on the heldout set
-            # TODO: update the heldout sets
             conformal_kwargs['temp'] = 1e-6  # set temp to low value when evaluating coverage
-            coverage[k].append(
-                assess_coverage(model, heldout_x, trans(heldout_obj)[0], **conformal_kwargs)
+            val_inputs = torch.tensor(
+                np.concatenate([val_split[0], test_split[0]]), device=device
             )
-            print(coverage[k][-1], k)
+            val_targets = torch.tensor(
+                np.concatenate([val_split[1], test_split[1]]), device=device
+            )
+            trans.eval()
+            val_targets = trans(val_targets)[0]
+            # import pdb; pdb.set_trace()
+            coverage[k].append(
+                assess_coverage(model, val_inputs, val_targets, **conformal_kwargs)
+            )
+            last_cvrg = coverage[k][-1]
+            print(
+                f"{k}: cred. coverage {last_cvrg[0]:0.4f}, conf. coverage {last_cvrg[1]:0.4f}, "
+                f"target coverage: {1 - alpha:0.4f}"
+            )
             model.train()
             torch.cuda.empty_cache()
 
             # now prepare the acquisition
             conformal_kwargs['temp'] = temp
             # TODO: check to see if we want to move to QMC eventually
-            iid_sampler = IIDNormalSampler(num_samples=mc_samples)
+            # iid_sampler = IIDNormalSampler(num_samples=mc_samples)
+            qmc_sampler = SobolQMCNormalSampler(num_samples=mc_samples)
             if k == "ei":
                 acqf = qExpectedImprovement(
                     model=model,
-                    best_f=(t_objective).max(),
-                    sampler=iid_sampler,
+                    best_f=(train_targets).max(),
+                    sampler=qmc_sampler,
                 )
             elif k == "nei":
                 acqf = qNoisyExpectedImprovement(
                     model=model,
-                    X_baseline=inputs,
-                    sampler=iid_sampler,
+                    X_baseline=train_inputs,
+                    sampler=qmc_sampler,
+                    prune_baseline=True,
                 )
             elif k == "ucb":
                 acqf = qUpperConfidenceBound(
@@ -167,22 +202,23 @@ def main(
             elif k == "kg":
                 acqf = qKnowledgeGradient(
                     model=model,
-                    current_value=t_objective.max(),
+                    current_value=train_targets.max(),
                     num_fantasies=None,
-                    sampler=iid_sampler,
+                    sampler=qmc_sampler,
                 )
             elif k == "cei":
                 acqf = qExpectedImprovement(
                     model=model,
-                    best_f=(t_objective).max(),
-                    sampler=iid_sampler,
+                    best_f=(train_targets).max(),
+                    sampler=qmc_sampler,
                 )
                 acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
             elif k == "cnei":
                 acqf = qNoisyExpectedImprovement(
                     model=model,
-                    X_baseline=inputs,
-                    sampler=iid_sampler,
+                    X_baseline=train_inputs,
+                    sampler=qmc_sampler,
+                    prune_baseline=True,
                 )
                 acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
             elif k == "cucb":
@@ -194,14 +230,14 @@ def main(
             elif k == "ckg":
                 acqf = qKnowledgeGradient(
                     model=model,
-                    current_value=t_objective.max(),
-                    num_fantasies=64,
-                    # sampler=iid_sampler,
+                    current_value=train_targets.max(),
+                    num_fantasies=None,
+                    sampler=qmc_sampler,
                 )
                 acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
 
             # optimize acquisition
-            new_x, new_obj = optimize_acqf_and_get_observation(
+            new_x, observed_obj, exact_obj = optimize_acqf_and_get_observation(
                 acqf, **optimize_acqf_kwargs
             )
             del acqf
@@ -209,22 +245,35 @@ def main(
             del model
             torch.cuda.empty_cache()
         
-            inputs = torch.cat([inputs, new_x])
-            objective = torch.cat([objective, new_obj])
+            # inputs = torch.cat([inputs, new_x])
+            # objective = torch.cat([objective, new_obj])
 
-            best_observed[k].append(objective.max().item())
-            # prepare new model
-            alpha = max(1.0 / math.sqrt(inputs.size(-2)), min_alpha)
-            mll, model, trans = initialize_model(
-                inputs,
-                objective,
-                method=method,
-                alpha=alpha,
-                tgt_grid_res=tgt_grid_res,
-            )
-            mll_model_dict[k] = (mll, model, trans)
-            data_dict[k] = inputs, objective
+            # best_observed[k].append(objective.max().item())
+            # # prepare new model
+            # alpha = max(1.0 / math.sqrt(inputs.size(-2)), min_alpha)
+            # mll, model, trans = initialize_model(
+            #     inputs,
+            #     objective,
+            #     method=method,
+            #     alpha=alpha,
+            #     tgt_grid_res=tgt_grid_res,
+            # )
+            # mll_model_dict[k] = (mll, model, trans)
+            # data_dict[k] = inputs, objective
             print(torch.cuda.memory_reserved() / 1024**3)
+            best_observed[k].append(
+                max(best_observed[k][-1], exact_obj.max().item())
+            )
+
+            # update splits
+            new_split = DataSplit(
+                new_x.cpu(),
+                observed_obj.cpu(),
+            )
+            train_split, val_split, test_split = update_splits(
+                train_split, val_split, test_split, new_split, holdout_ratio=0.2
+            )
+            data_dict[k] = (train_split, val_split, test_split)
 
         t1 = time.time()
 
@@ -242,7 +291,6 @@ def main(
 
 
 if __name__ == "__main__":
-    with torch.autograd.set_detect_anomaly(True):
-        args = parse()
-        output_dict = main(**vars(args))
+    args = parse()
+    output_dict = main(**vars(args))
     torch.save({"pars": vars(args), "results": output_dict}, args.output)

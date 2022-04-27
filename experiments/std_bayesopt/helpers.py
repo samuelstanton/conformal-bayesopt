@@ -1,10 +1,12 @@
 import numpy as np
 import torch
+import warnings
 
 from scipy import stats
 
 from gpytorch.distributions import MultivariateNormal
 from gpytorch import lazify
+
 
 from botorch.sampling import SobolQMCNormalSampler
 from botorch.posteriors import GPyTorchPosterior
@@ -124,7 +126,7 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     # grid_center = y_mean
     # grid_scale = y_std
     conditioned_models = None
-    sampler = SobolQMCNormalSampler(grid_res)
+    sampler = SobolQMCNormalSampler(grid_res, resample=False, collapse_batch_dims=True)
     for refine_step in range(0, max_grid_refinements + 1):
         # construct target grid, conformal prediction mask
         # target_grid = generate_target_grid(
@@ -149,45 +151,42 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         num_accepted = (conf_pred_mask >= 0.5).float().sum(-3)
 
         # center target grid around best scoring point in current grid
-        with torch.no_grad():
-            avg_score = q_conf_scores.mean(dim=-2, keepdim=True)
-            avg_score_argmax = avg_score.argmax(
-                dim=-3, keepdim=True
-            )  # (*q_batch_shape, 1, 1, 1)
-            avg_score_argmax = avg_score_argmax.expand(
-                *[-1] * (avg_score.ndim - 2), q_batch_size, -1
-            )  # (*q_batch_shape, 1, q_batch_size, 1)
-            new_center = torch.gather(
-                target_grid, dim=-3, index=avg_score_argmax
-            )
-            new_center = new_center.squeeze(
-                -3
-            )  # (*q_batch_shape, q_batch_size, 1, target_dim)
+        # with torch.no_grad():
+        #     avg_score = q_conf_scores.mean(dim=-2, keepdim=True)
+        #     avg_score_argmax = avg_score.argmax(
+        #         dim=-3, keepdim=True
+        #     )  # (*q_batch_shape, 1, 1, 1)
+        #     avg_score_argmax = avg_score_argmax.expand(
+        #         *[-1] * (avg_score.ndim - 2), q_batch_size, -1
+        #     )  # (*q_batch_shape, 1, q_batch_size, 1)
+        #     new_center = torch.gather(
+        #         target_grid, dim=-3, index=avg_score_argmax
+        #     )
+        #     new_center = new_center.squeeze(
+        #         -3
+        #     )  # (*q_batch_shape, q_batch_size, 1, target_dim)
+        # # TODO revisit when target_dim > 1, replace squeeze with movedim
+        # new_center = new_center.squeeze(-1)
 
-        # TODO revisit when target_dim > 1, replace squeeze with movedim
-        new_center = new_center.squeeze(-1)
         # covar_scale = (1. + 3. * (grid_res - num_accepted.float()) / grid_res).pow(2).squeeze(-1)
-        covar_scale = (1. + num_accepted.float() / grid_res).pow(2.).squeeze(-1)
+        scale_exp = 2. / q_batch_size
+        covar_scale = 1. + (num_accepted.float() / grid_res).pow(scale_exp).squeeze(-1)
         # covariance matrix has extra last dimension (*batch_shape, n, n)
         covar_scale = covar_scale.unsqueeze(-1)
 
         grid_center = y_post.mvn.mean
 
-        # import pdb;
-        # pdb.set_trace()
-
-        assert grid_center.size() == new_center.size()
+        # assert grid_center.size() == new_center.size()
         recenter_grid = False
         # if not torch.allclose(grid_center, new_center, rtol=1e-2):
         #     recenter_grid = True
         #     grid_center = new_center.contiguous()
 
-        # if fewer than two points have been accepted, increase grid resolution
-        # too_few_accepted = ()
-        refine_grid = False
-        if torch.any(num_accepted < 2):
-            refine_grid = True
-            grid_res *= 2
+        # if too many/all grid elements are in prediction set, expand the grid bounds
+        # grid_lb_accepted = (conf_pred_mask[..., 0, :, :] >= 0.5)
+        # grid_ub_accepted = (conf_pred_mask[..., -1, :, :] >= 0.5)
+        # too_many_accepted = (num_accepted > grid_res - 2)
+        # should_expand = grid_lb_accepted + grid_ub_accepted + too_many_accepted
 
         # warning! evaluating bc of weird GPyTorch lazy tensor broadcasting bug
         grid_covar = y_post.mvn.lazy_covariance_matrix.evaluate().contiguous()
@@ -197,6 +196,13 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
             expand_grid = True
             # assert grid_scale.size() == should_expand.size()
             # grid_scale += (grid_scale * num_accepted.float() / grid_res)
+
+        # if fewer than two points have been accepted, increase grid resolution
+        # too_few_accepted = ()
+        refine_grid = False
+        # if torch.any(num_accepted < 2):
+        #     refine_grid = True
+        #     grid_res *= 2
 
         if recenter_grid or expand_grid:
             y_post = GPyTorchPosterior(
@@ -209,6 +215,8 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         if refine_step < max_grid_refinements:
             del conditioned_models
 
+    # print(f"target_grid: {target_grid.shape}, min num accepted: {num_accepted.min()}")
+
     # print(
     #     f"conformal step: {refine_step},",
     #     f"grid resolution: {grid_res},",
@@ -218,9 +226,10 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
 
     # TODO improve error handling for case when max_iter is exhausted
     # if this error is raised, it's a good indication of a bug somewhere else
-    # if torch.any(num_accepted < 2):
-    #     import pdb; pdb.set_trace()
-    #     raise RuntimeError("not enough grid points accepted")
+    if torch.any(num_accepted < 2):
+            min_accepted = int(num_accepted.min())
+            max_accepted = int(num_accepted.max())
+            warnings.warn(f"\ntarget_grid: {target_grid.shape}, {min_accepted} - {max_accepted} grid points accepted")
 
     return target_grid, conf_pred_mask, conditioned_models
 
