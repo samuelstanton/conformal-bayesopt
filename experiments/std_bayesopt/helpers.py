@@ -91,7 +91,8 @@ def sample_grid_points(grid_lb, grid_ub, num_samples):
     return grid_samples
 
 
-def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_refinements, ratio_estimator=None):
+def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_refinements, sampler,
+                              ratio_estimator=None):
     """
     Construct dense pointwise target grid and conformal prediction mask
     Args:
@@ -126,7 +127,8 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     # grid_center = y_mean
     # grid_scale = y_std
     conditioned_models = None
-    sampler = SobolQMCNormalSampler(grid_res, resample=False, collapse_batch_dims=True)
+    best_result = (-1, None, None, None)
+    best_refine_step = 0
     for refine_step in range(0, max_grid_refinements + 1):
         # construct target grid, conformal prediction mask
         # target_grid = generate_target_grid(
@@ -149,38 +151,52 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         q_conf_scores = q_conf_scores.unsqueeze(-1)  # create target dim
 
         num_accepted = (conf_pred_mask >= 0.5).float().sum(-3)
+        min_accepted = num_accepted.min()
+        max_accepted = num_accepted.max()
+        if min_accepted > best_result[0]:
+            best_result = (
+                min_accepted, target_grid, conf_pred_mask, conditioned_models
+            )
+            best_refine_step = refine_step
 
         # center target grid around best scoring point in current grid
-        # with torch.no_grad():
-        #     avg_score = q_conf_scores.mean(dim=-2, keepdim=True)
-        #     avg_score_argmax = avg_score.argmax(
-        #         dim=-3, keepdim=True
-        #     )  # (*q_batch_shape, 1, 1, 1)
-        #     avg_score_argmax = avg_score_argmax.expand(
-        #         *[-1] * (avg_score.ndim - 2), q_batch_size, -1
-        #     )  # (*q_batch_shape, 1, q_batch_size, 1)
-        #     new_center = torch.gather(
-        #         target_grid, dim=-3, index=avg_score_argmax
-        #     )
-        #     new_center = new_center.squeeze(
-        #         -3
-        #     )  # (*q_batch_shape, q_batch_size, 1, target_dim)
-        # # TODO revisit when target_dim > 1, replace squeeze with movedim
-        # new_center = new_center.squeeze(-1)
-
-        # covar_scale = (1. + 3. * (grid_res - num_accepted.float()) / grid_res).pow(2).squeeze(-1)
-        scale_exp = 2. / q_batch_size
-        covar_scale = 1. + (num_accepted.float() / grid_res).pow(scale_exp).squeeze(-1)
-        # covariance matrix has extra last dimension (*batch_shape, n, n)
-        covar_scale = covar_scale.unsqueeze(-1)
+        with torch.no_grad():
+            avg_score = q_conf_scores.mean(dim=-2, keepdim=True)
+            avg_score_argmax = avg_score.argmax(
+                dim=-3, keepdim=True
+            )  # (*q_batch_shape, 1, 1, 1)
+            avg_score_argmax = avg_score_argmax.expand(
+                *[-1] * (avg_score.ndim - 2), q_batch_size, -1
+            )  # (*q_batch_shape, 1, q_batch_size, 1)
+            new_center = torch.gather(
+                target_grid, dim=-3, index=avg_score_argmax
+            )
+            new_center = new_center.squeeze(
+                -3
+            )  # (*q_batch_shape, q_batch_size, 1, target_dim)
+        # TODO revisit when target_dim > 1, replace squeeze with movedim
+        new_center = new_center.squeeze(-1)
 
         grid_center = y_post.mvn.mean
+        assert grid_center.size() == new_center.size()
 
-        # assert grid_center.size() == new_center.size()
         recenter_grid = False
         # if not torch.allclose(grid_center, new_center, rtol=1e-2):
         #     recenter_grid = True
         #     grid_center = new_center.contiguous()
+
+        accept_ratio = (num_accepted.float() / grid_res)
+        diff = accept_ratio - 0.5
+        scale_exp = 2. / q_batch_size  # volume is exponential in the batch size
+        covar_scale = 1. + diff.sign() * diff.abs().pow(scale_exp)
+        covar_scale = covar_scale.squeeze(-1)  # drop target dim
+
+        # covar_scale = (1. + 3. * (grid_res - num_accepted.float()) / grid_res).pow(2).squeeze(-1)
+        # scale_exp = 2. / q_batch_size
+        # covar_scale = 1. + (num_accepted.float() / grid_res).pow(scale_exp).squeeze(-1)
+
+        # covariance matrix has extra last dimension (*batch_shape, n, n)
+        covar_scale = covar_scale.unsqueeze(-1)
 
         # if too many/all grid elements are in prediction set, expand the grid bounds
         # grid_lb_accepted = (conf_pred_mask[..., 0, :, :] >= 0.5)
@@ -190,10 +206,10 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
 
         # warning! evaluating bc of weird GPyTorch lazy tensor broadcasting bug
         grid_covar = y_post.mvn.lazy_covariance_matrix.evaluate().contiguous()
-        expand_grid = False
-        if torch.any(num_accepted > grid_res - 2):
+        rescale_grid = False
+        if min_accepted < 2 or max_accepted > grid_res - 2:
             grid_covar = (covar_scale * grid_covar)
-            expand_grid = True
+            rescale_grid = True
             # assert grid_scale.size() == should_expand.size()
             # grid_scale += (grid_scale * num_accepted.float() / grid_res)
 
@@ -204,18 +220,20 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         #     refine_grid = True
         #     grid_res *= 2
 
-        if recenter_grid or expand_grid:
+        if recenter_grid or rescale_grid:
             y_post = GPyTorchPosterior(
                 MultivariateNormal(grid_center, lazify(grid_covar))
             )
-        # print(expand_grid, refine_grid, "expand and refine", torch.any(num_accepted < 2), torch.any(num_accepted > grid_res - 2))
-        if not any([recenter_grid, refine_grid, expand_grid]):
+        # print(rescale_grid, refine_grid, "expand and refine", torch.any(num_accepted < 2), torch.any(num_accepted > grid_res - 2))
+        if not any([recenter_grid, refine_grid, rescale_grid]):
             break
 
         if refine_step < max_grid_refinements:
             del conditioned_models
 
-    # print(f"target_grid: {target_grid.shape}, min num accepted: {num_accepted.min()}")
+    min_accepted, target_grid, conf_pred_mask, conditioned_models = best_result
+    num_accepted = (conf_pred_mask >= 0.5).float().sum(-3)
+    # print(f'best grid found during step {best_refine_step} with at least {int(min_accepted)} accepted')
 
     # print(
     #     f"conformal step: {refine_step},",
@@ -227,7 +245,7 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     # TODO improve error handling for case when max_iter is exhausted
     # if this error is raised, it's a good indication of a bug somewhere else
     if torch.any(num_accepted < 2):
-            min_accepted = int(num_accepted.min())
+            min_accepted = int(min_accepted)
             max_accepted = int(num_accepted.max())
             warnings.warn(f"\ntarget_grid: {target_grid.shape}, {min_accepted} - {max_accepted} grid points accepted")
 
@@ -285,7 +303,8 @@ def conformal_gp_regression(
         raise NotImplementedError
 
     posterior = updated_gps.posterior(train_inputs, observation_noise=True)
-    pred_dist = torch.distributions.Normal(posterior.mean, posterior.variance.sqrt())
+    post_var = est_train_post_var(updated_gps, observation_noise=True)
+    pred_dist = torch.distributions.Normal(posterior.mean, post_var.sqrt())
     conf_scores = pred_dist.log_prob(train_labels)
     conf_scores = conf_scores.view(*q_batch_shape, grid_size, num_total)
     q_conf_scores = conf_scores[..., num_old_train:].detach()
@@ -357,9 +376,10 @@ def assess_coverage(
             (targets > cred_lb) * (targets < cred_ub)
         ).float().mean()
 
+        grid_sampler = SobolQMCNormalSampler(grid_res, resample=True)
         target_grid, conf_pred_mask, _ = construct_conformal_bands(
             model, inputs[:, None], alpha, temp, grid_res,
-            max_grid_refinements, ratio_estimator
+            max_grid_refinements, grid_sampler, ratio_estimator
         )
         num_accepted = (conf_pred_mask >= 0.5).float().sum(-3)
         if torch.any(num_accepted < 2):
@@ -374,3 +394,22 @@ def assess_coverage(
         ).float().mean()
 
     return std_coverage.item(), conformal_coverage.item()
+
+
+def est_train_post_var(model, observation_noise=False, num_samples=8):
+    """
+    Estimate Var[f | D] pointwise on train.
+    If `observation_noise` is `True`, return Var[y | D].
+    https://www-users.cse.umn.edu/~saad/PDF/umsi-2005-082.pdf
+    """
+    noise = model.likelihood.noise
+    kxx_plus_noise = model.prediction_strategy.lik_train_train_covar
+    kxx = kxx_plus_noise.lazy_tensors[0]
+    z = (torch.rand(kxx.shape[-1], num_samples) > 0.5).to(noise)
+    z = 2. * (z - 0.5)  # if z in {0, 1} then denom can be 0 if n is small
+    denom = (z * z).sum(-1) + 1e-6
+    approx_eigs = (z * kxx.matmul(kxx_plus_noise.inv_matmul(z))).sum(-1) / denom
+    if observation_noise:
+        approx_eigs += 1.
+    approx_post_var = (noise * approx_eigs).unsqueeze(-1)  # create target dim
+    return approx_post_var

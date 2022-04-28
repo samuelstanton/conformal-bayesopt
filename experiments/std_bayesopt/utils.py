@@ -102,7 +102,7 @@ def get_exact_model(
     model = SingleTaskGP(
         train_X=x,
         train_Y=y,
-        likelihood=GaussianLikelihood(noise_constraint=Interval(1e-2, 0.2)),
+        likelihood=GaussianLikelihood(noise_constraint=Interval(5e-2, 5e-1)),
         outcome_transform=None,
         input_transform=None,
     )

@@ -1,6 +1,8 @@
 import types
 import torch
 
+from botorch.sampling import SobolQMCNormalSampler
+
 from experiments.std_bayesopt.helpers import (
     construct_conformal_bands,
     conf_mask_to_bounds,
@@ -22,6 +24,7 @@ def conformalize_acq_fn(acq_obj, alpha, temp, grid_res, max_grid_refinements, ra
         acq_fn_cls
     """
     old_forward = acq_obj.forward
+    acq_obj.grid_sampler = SobolQMCNormalSampler(grid_res, resample=False)
 
     def new_forward(self, X, *args, **kwargs):
         """
@@ -38,7 +41,7 @@ def conformalize_acq_fn(acq_obj, alpha, temp, grid_res, max_grid_refinements, ra
         q_batch_size = X.size(-2)
 
         target_grid, conf_pred_mask, conditioned_model = construct_conformal_bands(
-            old_model, X, alpha, temp, grid_res, max_grid_refinements, ratio_estimator
+            old_model, X, alpha, temp, grid_res, max_grid_refinements, self.grid_sampler, ratio_estimator
         )
         # reshape X to match conditioned_model batch shape
         reshaped_x = X.unsqueeze(-3)
