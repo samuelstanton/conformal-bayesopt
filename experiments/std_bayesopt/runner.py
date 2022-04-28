@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import time
 import math
+import os
 
 from botorch.acquisition.monte_carlo import (
     qExpectedImprovement,
@@ -87,8 +88,12 @@ def main(
 
     # run N_BATCH rounds of BayesOpt after the initial random batch
     for iteration in range(1, n_batch + 1):
+        print("Starting iteration: ", iteration, "mem allocated: ",
+                torch.cuda.memory_reserved() / 1024**3)
         t0 = time.time()
         for k in keys:
+            torch.cuda.empty_cache()
+            os.system("nvidia-smi")
 
             if k == "rnd":
                 # update random
@@ -129,6 +134,8 @@ def main(
                 max_grid_refinements=max_grid_refinements,
                 ratio_estimator=rx_estimator
             )
+            
+            torch.cuda.empty_cache()
 
             # now assess coverage on the heldout set
             conformal_kwargs['temp'] = 1e-6  # set temp to low value when evaluating coverage
@@ -140,6 +147,8 @@ def main(
                 f"{k}: cred. coverage {last_cvrg[0]:0.4f}, conf. coverage {last_cvrg[1]:0.4f}, "
                 f"target coverage: {1 - alpha:0.4f}"
             )
+            model.train()
+            torch.cuda.empty_cache()
 
             mll, model, trans = initialize_model(
                 all_inputs,
@@ -213,6 +222,27 @@ def main(
             new_x, observed_obj, exact_obj = optimize_acqf_and_get_observation(
                 acqf, **optimize_acqf_kwargs
             )
+            del acqf
+            model.train()
+            del model
+            torch.cuda.empty_cache()
+        
+            # inputs = torch.cat([inputs, new_x])
+            # objective = torch.cat([objective, new_obj])
+
+            # best_observed[k].append(objective.max().item())
+            # # prepare new model
+            # alpha = max(1.0 / math.sqrt(inputs.size(-2)), min_alpha)
+            # mll, model, trans = initialize_model(
+            #     inputs,
+            #     objective,
+            #     method=method,
+            #     alpha=alpha,
+            #     tgt_grid_res=tgt_grid_res,
+            # )
+            # mll_model_dict[k] = (mll, model, trans)
+            # data_dict[k] = inputs, objective
+            print(torch.cuda.memory_reserved() / 1024**3)
             best_observed[k].append(
                 max(best_observed[k][-1], exact_obj.max().item())
             )
