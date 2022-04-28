@@ -244,10 +244,11 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
 
     # TODO improve error handling for case when max_iter is exhausted
     # if this error is raised, it's a good indication of a bug somewhere else
+    min_accepted = int(min_accepted)
+    max_accepted = int(num_accepted.max())
+    msg = f"\ntarget_grid: {target_grid.shape}, {min_accepted} - {max_accepted} grid points accepted"
     if torch.any(num_accepted < 2):
-            min_accepted = int(min_accepted)
-            max_accepted = int(num_accepted.max())
-            warnings.warn(f"\ntarget_grid: {target_grid.shape}, {min_accepted} - {max_accepted} grid points accepted")
+            warnings.warn(msg)
 
     return target_grid, conf_pred_mask, conditioned_models
 
@@ -341,10 +342,10 @@ def conformal_gp_regression(
     )  # (*q_batch_shape, grid_size, q_batch_size)
     conf_pred_mask = torch.sigmoid((cum_weights - alpha) / temp)
 
-    num_accepted = (conf_pred_mask >= 0.5).float().sum(-2)
+    # num_accepted = (conf_pred_mask >= 0.5).float().sum(-2)
     # print(target_grid.shape)
-    if torch.any(num_accepted < 2) and target_grid.shape[1] == 2048:
-        import pdb; pdb.set_trace()
+    # if torch.any(num_accepted < 2) and target_grid.shape[1] == 2048:
+    #     import pdb; pdb.set_trace()
 
     return conf_pred_mask, updated_gps, q_conf_scores
 

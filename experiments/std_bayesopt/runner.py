@@ -88,12 +88,12 @@ def main(
 
     # run N_BATCH rounds of BayesOpt after the initial random batch
     for iteration in range(1, n_batch + 1):
-        print("Starting iteration: ", iteration, "mem allocated: ",
+        print("\nStarting iteration: ", iteration, "mem allocated: ",
                 torch.cuda.memory_reserved() / 1024**3)
         t0 = time.time()
         for k in keys:
             torch.cuda.empty_cache()
-            os.system("nvidia-smi")
+            # os.system("nvidia-smi")
 
             if k == "rnd":
                 # update random
@@ -107,7 +107,7 @@ def main(
             perm = np.random.permutation(np.arange(all_inputs.size(0)))
             num_test = math.ceil(0.2 * all_inputs.size(0))
             num_train = all_inputs.size(0) - num_test
-            print(f"train: {num_train}, test: {num_test}")
+            # print(f"train: {num_train}, test: {num_test}")
 
             test_inputs, test_targets = all_inputs[perm][:num_test], all_targets[perm][:num_test]
             train_inputs, train_targets = all_inputs[perm][num_test:], all_targets[perm][num_test:]
@@ -242,7 +242,7 @@ def main(
             # )
             # mll_model_dict[k] = (mll, model, trans)
             # data_dict[k] = inputs, objective
-            print(torch.cuda.memory_reserved() / 1024**3)
+            # print(torch.cuda.memory_reserved() / 1024**3)
             best_observed[k].append(
                 max(best_observed[k][-1], exact_obj.max().item())
             )
