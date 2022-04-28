@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import numpy as np
 
 from lambo.utils import DataSplit, update_splits
 
@@ -83,8 +84,10 @@ class RatioEstimator(nn.Module):
         return self.dataset.emp_prior * _p / (1 - _p + 1e-6)
 
     def optimize_callback(self, xk):
-        xk = torch.from_numpy(xk).reshape(-1, 1)
-        xk.add_(0.1 * torch.randn_like(xk))
+        if isinstance(xk, np.ndarray):
+            xk = torch.from_numpy(xk)
+        xk = xk.reshape(-1, 1)
+        # xk.add_(0.1 * torch.randn_like(xk))
 
         yk = torch.zeros(len(xk), 1)
 
@@ -92,8 +95,6 @@ class RatioEstimator(nn.Module):
 
         ## One stochastic gradient step of the classifier.
         self.classifier.requires_grad_(True)
-        # for p in self.classifier.parameters():
-        #     p.requires_grad_(True)
 
         num_total = len(self.dataset)
         num_positive = self.dataset.num_positive
@@ -107,14 +108,13 @@ class RatioEstimator(nn.Module):
                 self.dataset, shuffle=True, batch_size=64
             )
 
-            X, y = next(iter(loader))
-            X, y = X.to(self.device).float(), y.to(self.device)
-            self.optim.zero_grad()
-            # loss = self.criterion(self.classifier(X), y)
-            loss = loss_fn(self.classifier(X), y)
-            loss.backward()
-            print(loss.item())
-            self.optim.step()
+            for _ in range(4):
+                X, y = next(iter(loader))
+                X, y = X.to(self.device).float(), y.to(self.device)
+                self.optim.zero_grad()
+                loss = loss_fn(self.classifier(X), y)
+                loss.backward()
+                self.optim.step()
 
         self.classifier.eval()
         self.classifier.requires_grad_(False)
