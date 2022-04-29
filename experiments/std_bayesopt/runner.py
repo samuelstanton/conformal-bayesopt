@@ -210,13 +210,18 @@ def main(
                 )
                 acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
             elif k == "ckg":
-                acqf = qKnowledgeGradient(
+                acqf = qConformalKnowledgeGradient(
+                    alpha=alpha,
+                    temp=temp,
+                    grid_res=mc_samples,
+                    max_grid_refinements=max_grid_refinements,
+                    ratio_estimator=rx_estimator,
                     model=model,
                     # current_value=trans(all_targets)[0].max(),
                     num_fantasies=None,
                     sampler=qmc_sampler,
                 )
-                acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
+                # acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
 
             # optimize acquisition
             new_x, observed_obj, exact_obj = optimize_acqf_and_get_observation(
