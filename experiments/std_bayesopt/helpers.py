@@ -258,7 +258,6 @@ def conformal_gp_regression(
 #         expanded_inputs = expanded_inputs.repeat(*[1]*(len(q_batch_shape)+2), *gp._aug_batch_shape, 1)
         
     updated_gps = gp.condition_on_observations(expanded_inputs, target_grid)
-
     # get ready to compute the conformal scores
     num_old_train = gp.train_inputs[0].size(-2)
     num_total = updated_gps.train_inputs[0].size(-2)  # num_old_train + q_batch_size
@@ -267,7 +266,7 @@ def conformal_gp_regression(
     train_inputs = updated_gps.train_inputs[
         0
     ]  # (*q_batch_shape, grid_size, num_total, input_dim)
-    if gp._aug_batch_shape is not torch.Size([]):
+    if gp._aug_batch_shape != torch.Size([]):
         # we need to put the batch shape dim first for the posterior call
         train_inputs = train_inputs.movedim(len(q_batch_shape) + 1, 0)
         train_inputs = train_inputs[0] # damn botorch batch dims
