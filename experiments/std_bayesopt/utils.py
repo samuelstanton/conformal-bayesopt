@@ -36,9 +36,9 @@ def generate_initial_data(n, fn, NOISE_SE, device, dtype, is_poisson=False):
     )  # * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]
     cube_loc = fn.bounds[0]
     cube_scale = fn.bounds[1] - fn.bounds[0]
-    exact_obj = fn(train_x * cube_scale + cube_loc).unsqueeze(
-        -1
-    )  # add output dimension
+    exact_obj = fn(train_x * cube_scale + cube_loc)
+    if exact_obj.shape[-1] == n:
+        exact_obj = exact_obj.unsqueeze(-1) # add output dimension if we need to
     # exact_con = outcome_constraint(train_x).unsqueeze(-1)  # add output dimension
     train_obj = exact_obj + NOISE_SE * torch.randn_like(exact_obj)
     best_observed_value = exact_obj.max().item()

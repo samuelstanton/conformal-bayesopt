@@ -3,7 +3,7 @@ import torch
 
 from botorch.sampling import SobolQMCNormalSampler
 
-from experiments.std_bayesopt.helpers import (
+from helpers import (
     construct_conformal_bands,
     conf_mask_to_bounds,
     sample_grid_points,
