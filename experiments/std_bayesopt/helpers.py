@@ -134,8 +134,8 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     for refine_step in range(0, max_grid_refinements + 1):
         # construct target grid, conformal prediction mask
 
-        sampler = SobolQMCNormalSampler(grid_res)
-        # sampler._sample_shape = torch.Size([grid_res])
+        # sampler = SobolQMCNormalSampler(grid_res)
+        sampler._sample_shape = torch.Size([grid_res])
         target_grid = sampler(y_post)
         # target_grid = y_post.rsample(torch.Size((grid_res,)))
         assert target_grid.size(0) == grid_res
