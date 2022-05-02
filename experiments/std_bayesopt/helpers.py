@@ -8,7 +8,7 @@ from gpytorch.distributions import MultivariateNormal
 from gpytorch import lazify
 
 
-from botorch.sampling import SobolQMCNormalSampler
+from botorch.sampling import SobolQMCNormalSampler, IIDNormalSampler
 from botorch.posteriors import GPyTorchPosterior
 
 import torchsort
@@ -127,7 +127,7 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     # grid_center = y_mean
     # grid_scale = y_std
     conditioned_models = None
-    best_result = (-1, None, None, None)
+    best_result = (-1, None, None, None, None)
     best_refine_step = 0
     for refine_step in range(0, max_grid_refinements + 1):
         # construct target grid, conformal prediction mask
@@ -138,15 +138,18 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         # sampler = SobolQMCNormalSampler(grid_res)
         sampler._sample_shape = torch.Size([grid_res])
         target_grid = sampler(y_post)
+        weights = y_post.mvn.log_prob(target_grid.squeeze(-1))
+        weights = weights[..., None, None]
         assert target_grid.size(0) == grid_res
         target_grid = torch.movedim(target_grid, 0, -3)
+        weights = torch.movedim(weights, 0, -3)
         # print(target_grid.shape, refine_step, grid_res)
 
         conf_pred_mask, conditioned_models, q_conf_scores = conformal_gp_regression(
             model, inputs, target_grid, alpha, temp=temp
         )
         # TODO revisit for target_dim > 1
-        # reshape to (*q_batch_shape, q_batch_size, grid_res, 1, target_dim)
+        # reshape to (*q_batch_shape, grid_res, q_batch_size, target_dim)
         conf_pred_mask = conf_pred_mask.unsqueeze(-1)  # create target dim
         q_conf_scores = q_conf_scores.unsqueeze(-1)  # create target dim
 
@@ -155,30 +158,30 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         max_accepted = num_accepted.max()
         if min_accepted > best_result[0]:
             best_result = (
-                min_accepted, target_grid, conf_pred_mask, conditioned_models
+                min_accepted, target_grid, weights, conf_pred_mask, conditioned_models
             )
             best_refine_step = refine_step
 
         # center target grid around best scoring point in current grid
-        with torch.no_grad():
-            avg_score = q_conf_scores.mean(dim=-2, keepdim=True)
-            avg_score_argmax = avg_score.argmax(
-                dim=-3, keepdim=True
-            )  # (*q_batch_shape, 1, 1, 1)
-            avg_score_argmax = avg_score_argmax.expand(
-                *[-1] * (avg_score.ndim - 2), q_batch_size, -1
-            )  # (*q_batch_shape, 1, q_batch_size, 1)
-            new_center = torch.gather(
-                target_grid, dim=-3, index=avg_score_argmax
-            )
-            new_center = new_center.squeeze(
-                -3
-            )  # (*q_batch_shape, q_batch_size, 1, target_dim)
-        # TODO revisit when target_dim > 1, replace squeeze with movedim
-        new_center = new_center.squeeze(-1)
-
+        # with torch.no_grad():
+        #     avg_score = q_conf_scores.mean(dim=-2, keepdim=True)
+        #     avg_score_argmax = avg_score.argmax(
+        #         dim=-3, keepdim=True
+        #     )  # (*q_batch_shape, 1, 1, 1)
+        #     avg_score_argmax = avg_score_argmax.expand(
+        #         *[-1] * (avg_score.ndim - 2), q_batch_size, -1
+        #     )  # (*q_batch_shape, 1, q_batch_size, 1)
+        #     new_center = torch.gather(
+        #         target_grid, dim=-3, index=avg_score_argmax
+        #     )
+        #     new_center = new_center.squeeze(
+        #         -3
+        #     )  # (*q_batch_shape, q_batch_size, 1, target_dim)
+        # # TODO revisit when target_dim > 1, replace squeeze with movedim
+        # new_center = new_center.squeeze(-1)
+        #
         grid_center = y_post.mvn.mean
-        assert grid_center.size() == new_center.size()
+        # assert grid_center.size() == new_center.size()
 
         recenter_grid = False
         # if not torch.allclose(grid_center, new_center, rtol=1e-2):
@@ -231,7 +234,7 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         if refine_step < max_grid_refinements:
             del conditioned_models
 
-    min_accepted, target_grid, conf_pred_mask, conditioned_models = best_result
+    min_accepted, target_grid, weights, conf_pred_mask, conditioned_models = best_result
     num_accepted = (conf_pred_mask >= 0.5).float().sum(-3)
     # print(f'best grid found during step {best_refine_step} with at least {int(min_accepted)} accepted')
 
@@ -250,7 +253,7 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     if torch.any(num_accepted < 2):
             warnings.warn(msg)
 
-    return target_grid, conf_pred_mask, conditioned_models
+    return target_grid, weights, conf_pred_mask, conditioned_models
 
 
 def conformal_gp_regression(
@@ -304,8 +307,8 @@ def conformal_gp_regression(
         raise NotImplementedError
 
     posterior = updated_gps.posterior(train_inputs, observation_noise=True)
-    post_var = est_train_post_var(updated_gps, observation_noise=True)
-    pred_dist = torch.distributions.Normal(posterior.mean, post_var.sqrt())
+    # post_var = est_train_post_var(updated_gps, observation_noise=True)
+    pred_dist = torch.distributions.Normal(posterior.mean, posterior.variance.sqrt())
     conf_scores = pred_dist.log_prob(train_labels)
     conf_scores = conf_scores.view(*q_batch_shape, grid_size, num_total)
     q_conf_scores = conf_scores[..., num_old_train:].detach()
@@ -378,7 +381,8 @@ def assess_coverage(
         ).float().mean()
 
         grid_sampler = SobolQMCNormalSampler(grid_res, resample=True)
-        target_grid, conf_pred_mask, _ = construct_conformal_bands(
+        # grid_sampler = IIDNormalSampler(grid_res, resample=True, collapse_batch_dims=False)
+        target_grid, _, conf_pred_mask, _ = construct_conformal_bands(
             model, inputs[:, None], alpha, temp, grid_res,
             max_grid_refinements, grid_sampler, ratio_estimator
         )

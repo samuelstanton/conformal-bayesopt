@@ -60,7 +60,7 @@ def main(
     bounds[1] += 1.
     print(f"function: {problem}, x bounds: {bounds}")
 
-    keys = ["cei", "cnei", "cucb", "ei", "nei", "ucb", "rnd"]
+    keys = ["cucb", "cei", "cnei", "ucb", "ei", "nei", "rnd"]
     # keys = ["ckg", "cucb", "kg", "ucb", "rnd"]
     best_observed = {k: [] for k in keys}
     coverage = {k: [] for k in keys}
@@ -161,67 +161,63 @@ def main(
             trans.eval()
 
             # now prepare the acquisition
-            conformal_kwargs['temp'] = temp
             qmc_sampler = SobolQMCNormalSampler(num_samples=mc_samples)
+            base_kwargs = dict(
+                model=model,
+                sampler=qmc_sampler,
+            )
+            conformal_kwargs['alpha'] = max(1.0 / math.sqrt(all_inputs.size(0)), min_alpha)
+            conformal_kwargs['temp'] = temp
+
             if k == "ei":
                 acqf = qExpectedImprovement(
-                    model=model,
+                    **base_kwargs,
                     best_f=trans(all_targets)[0].max(),
-                    sampler=qmc_sampler,
                 )
             elif k == "nei":
                 acqf = qNoisyExpectedImprovement(
-                    model=model,
+                    **base_kwargs,
                     X_baseline=all_inputs,
-                    sampler=qmc_sampler,
                     prune_baseline=True,
                 )
             elif k == "ucb":
                 acqf = qUpperConfidenceBound(
-                    model=model,
+                    **base_kwargs,
                     beta=1.,
                 )
             elif k == "kg":
                 acqf = qKnowledgeGradient(
-                    model=model,
+                    **base_kwargs,
                     # current_value=trans(all_targets)[0].max(),
                     num_fantasies=None,
-                    sampler=qmc_sampler,
                 )
             elif k == "cei":
-                acqf = qExpectedImprovement(
-                    model=model,
+                acqf = qConformalExpectedImprovement(
+                    **conformal_kwargs,
+                    **base_kwargs,
                     best_f=trans(all_targets)[0].max(),
-                    sampler=qmc_sampler,
                 )
-                acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
             elif k == "cnei":
-                acqf = qNoisyExpectedImprovement(
-                    model=model,
+                acqf = qConformalNoisyExpectedImprovement(
+                    **conformal_kwargs,
+                    **base_kwargs,
                     X_baseline=all_inputs,
-                    sampler=qmc_sampler,
                     prune_baseline=True,
                 )
-                acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
             elif k == "cucb":
-                acqf = qUpperConfidenceBound(
-                    model=model,
+                acqf = qConformalUpperConfidenceBound(
+                    **conformal_kwargs,
+                    optimistic=True,
+                    **base_kwargs,
                     beta=1.,
                 )
-                acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
             elif k == "ckg":
                 acqf = qConformalKnowledgeGradient(
-                    alpha=alpha,
-                    temp=temp,
-                    grid_res=mc_samples,
-                    max_grid_refinements=max_grid_refinements,
-                    ratio_estimator=rx_estimator,
-                    model=model,
+                    **conformal_kwargs,
+                    **base_kwargs,
                     # current_value=trans(all_targets)[0].max(),
                     num_fantasies=None,
-                    sampler=qmc_sampler,
                 )
-                # acqf = conformalize_acq_fn(acqf, **conformal_kwargs)
 
             # optimize acquisition
             new_x, observed_obj, exact_obj = optimize_acqf_and_get_observation(
@@ -261,7 +257,7 @@ def main(
 
         best = {key: val[-1] for key, val in best_observed.items()}
         if verbose:
-            print(f"\nBatch {iteration:>2}, time = {t1-t0:>4.2f}, best values:")
+            print(f"\nBatch: {iteration:>2}, time: {t1-t0:>4.2f}, alpha: {alpha:0.4f}, best values:")
             [print(f"{key}: {val:0.4f}") for key, val in best.items()]
 
     output_dict = {
