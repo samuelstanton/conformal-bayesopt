@@ -207,10 +207,13 @@ class qConformalKnowledgeGradient(ConformalAcquisition, qKnowledgeGradient):
         values = values.mean(0)
         values = values.view(*q_batch_shape, grid_res, -1)
 
-        # integrate w.r.t. X_actual outcome variables
-        opt_mask = torch.ones_like(target_grid)
-        res = _conformal_integration(values, conf_pred_mask, grid_logp, self.alpha, opt_mask)
+        #
+        conf_pred_mask = conf_pred_mask.prod(dim=-2, keepdim=True)
+        opt_mask = torch.ones_like(conf_pred_mask)
 
+        # integrate w.r.t. X_actual outcome variables
+        res = _conformal_integration(values, conf_pred_mask, grid_logp, self.alpha, opt_mask)
+        res = res.max(dim=-1)[0]
         res = res.view(*q_batch_shape)
 
         return res
