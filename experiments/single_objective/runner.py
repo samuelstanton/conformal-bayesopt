@@ -32,7 +32,7 @@ from utils import (
     update_random_observations,
     get_problem,
 )
-
+sys.path.append("../../")
 from lambo.utils import DataSplit, update_splits
 
 

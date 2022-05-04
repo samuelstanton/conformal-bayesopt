@@ -12,7 +12,7 @@ from botorch.test_functions.multi_objective import (
     BraninCurrin,
     Penicillin,
     CarSideImpact,
-    ZDT3,
+    ZDT2,
 )
 from botorch.optim import optimize_acqf
 
@@ -43,7 +43,7 @@ def generate_initial_data(n, fn, NOISE_SE, device, dtype, is_poisson=False):
     cube_loc = fn.bounds[0]
     cube_scale = fn.bounds[1] - fn.bounds[0]
     exact_obj = fn(train_x * cube_scale + cube_loc)
-    if exact_obj.shape[-1] == n:
+    if exact_obj.ndim == 1:
         exact_obj = exact_obj.unsqueeze(-1) # add output dimension if we need to
     train_obj = exact_obj + NOISE_SE * torch.randn_like(exact_obj)
     best_observed_value = exact_obj.max().item()
@@ -131,7 +131,7 @@ def get_problem(problem, dim, num_objectives=1):
         return BraninCurrin(negate=True)
     elif problem == "zdt2":
         # TODO: check if we need to negate
-        return ZDT2(dim=dim, num_objectives=num_objectives, negate=True)
+        return ZDT2(dim=dim, num_objectives=2, negate=True)
     elif problem == "penicillin":
         # TODO: check if we need to negate
         return Penicillin(negate=True)

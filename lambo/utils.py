@@ -5,12 +5,18 @@ import itertools
 
 import numpy as np
 import torch
-from Levenshtein._levenshtein import distance as edit_distance, editops as edit_ops
+try:
+	from Levenshtein._levenshtein import distance as edit_distance, editops as edit_ops
+except:
+	print("no levenshtein")
 
 from scipy.stats import rankdata
 from scipy.special import softmax
 
-from cachetools import cached, LRUCache
+try:
+	from cachetools import cached, LRUCache
+except:
+	print("no cachetools")
 
 from lambo.transforms import padding_collate_fn
 
