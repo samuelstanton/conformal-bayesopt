@@ -11,11 +11,13 @@ from botorch.acquisition.multi_objective import (
 )
 from botorch import fit_gpytorch_model
 from botorch.sampling.samplers import IIDNormalSampler, SobolQMCNormalSampler
+from botorch.utils.multi_objective.box_decompositions.non_dominated import FastNondominatedPartitioning
+from botorch.utils.multi_objective.box_decompositions.dominated import DominatedPartitioning
 
 import sys
 sys.path.append("../../conformalbo/")
 from helpers import assess_coverage
-from mo_acquisitions import (
+from mobo_acquisitions import (
     qConformalNoisyExpectedHypervolumeImprovement,
     qConformalExpectedHypervolumeImprovement,
 )
@@ -63,7 +65,7 @@ def main(
     print(f"function: {problem}, x bounds: {bounds}")
 
     keys = ["cehvi", "cnehvi", "ehvi", "nehvi", "rnd"]
-    best_observed = {k: [] for k in keys}
+    hv_dict = {k: [] for k in keys}
     coverage = {k: [] for k in keys}
 
     # TODO check this
@@ -73,12 +75,16 @@ def main(
     (
         all_inputs,
         all_targets,
-        best_actual_obj,
+        _,
     ) = generate_initial_data(num_init, bb_fn, noise_se, device, dtype)
 
+    # initial hypervolumes
+    bd = DominatedPartitioning(ref_point=bb_fn.ref_point, Y=all_targets)
+    volume = bd.compute_hypervolume().item()
+    
     data_dict = {}
     for k in keys:
-        best_observed[k].append(best_actual_obj)
+        hv_dict[k].append(volume)
         data_dict[k] = (all_inputs, all_targets)
 
     optimize_acqf_kwargs = {
@@ -99,10 +105,14 @@ def main(
 
             if k == "rnd":
                 # update random
-                # TODO
-                best_observed[k] = update_random_observations_multiobjective(
-                    batch_size, best_observed[k], bb_fn.bounds, bb_fn, dim=bounds.shape[1]
-                )
+                _, all_targets = data_dict[k]
+                _, next_targets, _ = generate_initial_data(batch_size, bb_fn, noise_se, device, dtype)
+                all_targets = torch.cat((all_targets, next_targets))
+                
+                # update hypervolumes
+                bd = DominatedPartitioning(ref_point=bb_fn.ref_point, Y=all_targets)
+                volume = bd.compute_hypervolume().item()
+                hv_dict[k].append(volume)
                 continue
 
             # get the data
@@ -178,17 +188,17 @@ def main(
                 with torch.no_grad():
                     pred = model.posterior(all_inputs).mean
                 partitioning = FastNondominatedPartitioning(
-                    ref_point=problem.ref_point,
+                    ref_point=bb_fn.ref_point,
                     Y=pred,
                 )
                 acqf = qExpectedHypervolumeImprovement(
-                    ref_point=problem.ref_point,
+                    ref_point=bb_fn.ref_point,
                     partitioning=partitioning,
                     **base_kwargs,
                 )
             elif k == "nehvi":
                 acqf = qNoisyExpectedHypervolumeImprovement(
-                    ref_point=problem.ref_point,
+                    ref_point=bb_fn.ref_point,
                     X_baseline=all_inputs,
                     prune_baseline=True,
                     **base_kwargs,
@@ -197,18 +207,18 @@ def main(
                 with torch.no_grad():
                     pred = model.posterior(all_inputs).mean
                 partitioning = FastNondominatedPartitioning(
-                    ref_point=problem.ref_point,
+                    ref_point=bb_fn.ref_point,
                     Y=pred,
                 )
                 acqf = qConformalExpectedHypervolumeImprovement(
-                    ref_point=problem.ref_point,
+                    ref_point=bb_fn.ref_point,
                     partitioning=partitioning,
                     **base_kwargs,
                     **conformal_kwargs,
                 )
             elif k == "cnehvi":
                 acqf = qConformalNoisyExpectedHypervolumeImprovement(
-                    ref_point=problem.ref_point,
+                    ref_point=bb_fn.ref_point,
                     X_baseline=all_inputs,
                     prune_baseline=True,
                     **base_kwargs,
@@ -224,24 +234,25 @@ def main(
             del model
             torch.cuda.empty_cache()
         
-            best_observed[k].append(
-                max(best_observed[k][-1], exact_obj.max().item())
-            )
-
             # update dataset
             all_inputs = torch.cat([all_inputs, new_x])
             all_targets = torch.cat([all_targets, observed_obj])
             data_dict[k] = (all_inputs, all_targets)
 
+            # update hypervolumes
+            bd = DominatedPartitioning(ref_point=bb_fn.ref_point, Y=all_targets)
+            volume = bd.compute_hypervolume().item()
+            hv_dict[k].append(volume)
+
         t1 = time.time()
 
-        best = {key: val[-1] for key, val in best_observed.items()}
+        best = {key: val[-1] for key, val in hv_dict.items()}
         if verbose:
             print(f"\nBatch: {iteration:>2}, time: {t1-t0:>4.2f}, alpha: {alpha:0.4f}, best values:")
             [print(f"{key}: {val:0.4f}") for key, val in best.items()]
 
     output_dict = {
-        "best_achieved": best_observed,
+        "best_achieved": hv_dict,
         "coverage": coverage,
         "inputs": {k: data_dict[k][0] for k in keys},
     }

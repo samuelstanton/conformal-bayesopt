@@ -127,6 +127,8 @@ def get_problem(problem, dim, num_objectives=1):
         return Branin(negate=True)
     elif problem == "ackley":
         return Ackley(dim=dim, negate=True)
+    elif problem == "branincurrin":
+        return BraninCurrin(negate=True)
     elif problem == "zdt2":
         # TODO: check if we need to negate
         return ZDT2(dim=dim, num_objectives=num_objectives, negate=True)
@@ -168,9 +170,8 @@ def optimize_acqf_and_get_observation(
     cube_loc = fn.bounds[0]
     cube_scale = fn.bounds[1] - fn.bounds[0]
     # TODO: fix unsqueezing here
-    exact_obj = fn(new_x * cube_scale + cube_loc).unsqueeze(
-        -1
-    )  # add output dimension
-
+    exact_obj = fn(new_x * cube_scale + cube_loc)
+    if exact_obj.ndim == 1:
+        exact_obj = exact_obj.unsqueeze(-1)
     observed_obj = exact_obj + noise_se * torch.randn_like(exact_obj)
     return new_x, observed_obj, exact_obj
