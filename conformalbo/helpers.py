@@ -183,6 +183,9 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         grid_covar = y_post.mvn.lazy_covariance_matrix.evaluate().contiguous()
         rescale_grid = False
         if min_accepted < 2 or max_accepted > grid_res - 2:
+            # batched mt case
+            if covar_scale.shape[-1] != grid_covar.shape[-1]:
+                covar_scale = covar_scale.reshape(*grid_covar.shape[:-1], 1)
             grid_covar = (covar_scale * grid_covar)
             rescale_grid = True
 
@@ -202,7 +205,9 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
             break
 
         if refine_step < max_grid_refinements:
+            conditioned_models.train() # don't let this build up
             del conditioned_models
+            torch.cuda.empty_cache()
 
     min_accepted, target_grid, weights, conf_pred_mask, conditioned_models = best_result
     num_accepted = (conf_pred_mask >= 0.5).float().sum(-3)
@@ -340,6 +345,7 @@ def assess_coverage(
         std_coverage: float
         conformal_coverage: float
     """
+    print("at beginning of cov.: ", torch.cuda.memory_allocated() / 1024**3)
     model.eval()
     with torch.no_grad():
         y_post = model.posterior(inputs, observation_noise=True)
@@ -370,6 +376,11 @@ def assess_coverage(
         except:
             print("Warning heldout set coverage evaluation failed. Returning nan")
             conformal_coverage = torch.tensor(float('nan'))
+            
+    model.train()
+    del target_grid, conf_pred_mask
+    torch.cuda.empty_cache()
+    print("at end: ", torch.cuda.memory_allocated() / 1024**3)
 
     return std_coverage.item(), conformal_coverage.item()
 
