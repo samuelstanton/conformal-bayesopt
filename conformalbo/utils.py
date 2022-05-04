@@ -8,6 +8,12 @@ from gpytorch.mlls import ExactMarginalLogLikelihood
 from botorch.models.transforms import Standardize, Normalize
 from botorch.models import SingleTaskGP
 from botorch.test_functions import Branin, Levy, Ackley
+from botorch.test_functions.multi_objective import (
+    BraninCurrin,
+    Penicillin,
+    CarSideImpact,
+    ZDT3,
+)
 from botorch.optim import optimize_acqf
 
 
@@ -39,7 +45,6 @@ def generate_initial_data(n, fn, NOISE_SE, device, dtype, is_poisson=False):
     exact_obj = fn(train_x * cube_scale + cube_loc)
     if exact_obj.shape[-1] == n:
         exact_obj = exact_obj.unsqueeze(-1) # add output dimension if we need to
-    # exact_con = outcome_constraint(train_x).unsqueeze(-1)  # add output dimension
     train_obj = exact_obj + NOISE_SE * torch.randn_like(exact_obj)
     best_observed_value = exact_obj.max().item()
     print(train_x.shape, train_obj.shape)
@@ -55,6 +60,7 @@ def initialize_model(
     loss="elbo",
     **kwargs
 ):
+    # TODO: enable multitaskGP here
     transform = Standardize(train_obj.shape[-1]).to(train_x.device)
     t_train_obj = transform(train_obj)[0]
     # define models for objective and constraint
@@ -99,6 +105,7 @@ def get_exact_model(
     yvar,
     **kwargs
 ):
+    # TODO: setup noise constraint in batched setting
     model = SingleTaskGP(
         train_X=x,
         train_Y=y,
@@ -109,17 +116,27 @@ def get_exact_model(
 
     if yvar is not None:
         model.likelihood.raw_noise.detach_()
-        model.likelihood.noise = yvar.item()
+        model.likelihood.noise = yvar#.item()
     return model
 
 
-def get_problem(problem, dim):
+def get_problem(problem, dim, num_objectives=1):
     if problem == "levy":
         return Levy(dim=dim, negate=True)
     elif problem == "branin":
         return Branin(negate=True)
     elif problem == "ackley":
         return Ackley(dim=dim, negate=True)
+    elif problem == "zdt2":
+        # TODO: check if we need to negate
+        return ZDT2(dim=dim, num_objectives=num_objectives, negate=True)
+    elif problem == "penicillin":
+        # TODO: check if we need to negate
+        return Penicillin(negate=True)
+    elif problem == "carside":
+        return CarSideImpact(negate=True)
+    # we may want to try ToyRobust as well for more of a noise robustness
+    # argument
 
 
 def optimize_acqf_and_get_observation(
@@ -150,6 +167,7 @@ def optimize_acqf_and_get_observation(
     new_x = candidates.detach()
     cube_loc = fn.bounds[0]
     cube_scale = fn.bounds[1] - fn.bounds[0]
+    # TODO: fix unsqueezing here
     exact_obj = fn(new_x * cube_scale + cube_loc).unsqueeze(
         -1
     )  # add output dimension

@@ -15,6 +15,15 @@ from botorch.acquisition.objective import IdentityMCObjective
 from botorch import fit_gpytorch_model
 from botorch.sampling.samplers import IIDNormalSampler, SobolQMCNormalSampler
 
+import sys
+sys.path.append("../../conformalbo/")
+from helpers import assess_coverage
+from acquisitions import (
+    qConformalExpectedImprovement,
+    qConformalNoisyExpectedImprovement,
+    qConformalUpperConfidenceBound,
+    qConformalKnowledgeGradient,
+)
 from utils import (
     generate_initial_data,
     initialize_model,
@@ -23,8 +32,6 @@ from utils import (
     update_random_observations,
     get_problem,
 )
-from helpers import assess_coverage
-from acquisitions import *
 
 from lambo.utils import DataSplit, update_splits
 
