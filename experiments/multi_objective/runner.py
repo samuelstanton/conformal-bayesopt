@@ -46,7 +46,7 @@ def main(
     dtype: str = "double",
     verbose: bool = True,
     output: str = None,
-    problem: str = None,
+    problem: str = "branincurrin",
     min_alpha: float = 0.05,
     max_grid_refinements: int = 4,
 ):
