@@ -11,6 +11,7 @@ from botorch.acquisition.monte_carlo import (
     qUpperConfidenceBound,
 )
 from botorch.acquisition.knowledge_gradient import qKnowledgeGradient
+from botorch.acquisition.objective import IdentityMCObjective
 from botorch import fit_gpytorch_model
 from botorch.sampling.samplers import IIDNormalSampler, SobolQMCNormalSampler
 
@@ -168,6 +169,7 @@ def main(
             )
             conformal_kwargs['alpha'] = max(1.0 / math.sqrt(all_inputs.size(0)), min_alpha)
             conformal_kwargs['temp'] = temp
+            conformal_kwargs['max_grid_refinements'] = 0
 
             if k == "ei":
                 acqf = qExpectedImprovement(
@@ -190,6 +192,8 @@ def main(
                     **base_kwargs,
                     # current_value=trans(all_targets)[0].max(),
                     num_fantasies=None,
+                    objective=IdentityMCObjective(),
+                    inner_sampler=SobolQMCNormalSampler(mc_samples),
                 )
             elif k == "cei":
                 acqf = qConformalExpectedImprovement(
@@ -217,6 +221,8 @@ def main(
                     **base_kwargs,
                     # current_value=trans(all_targets)[0].max(),
                     num_fantasies=None,
+                    objective=IdentityMCObjective(),
+                    inner_sampler=SobolQMCNormalSampler(mc_samples),
                 )
 
             # optimize acquisition
