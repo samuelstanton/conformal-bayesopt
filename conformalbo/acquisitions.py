@@ -225,6 +225,9 @@ def _conformal_integration(values, conf_pred_mask, grid_logp, alpha, opt_mask):
     """
     integrate w.r.t. outcome variables
     """
+    opt_mask = opt_mask.prod(-1, keepdim=True)
+    conf_pred_mask = conf_pred_mask.prod(-1, keepdim=True)
+
     combined_mask = conf_pred_mask * opt_mask
 
     with torch.no_grad():
@@ -240,7 +243,7 @@ def _conformal_integration(values, conf_pred_mask, grid_logp, alpha, opt_mask):
 
     combined_weights = alpha * nonconf_weights + (1. - alpha) * combined_mask * conf_weights
 
-    if combined_weights.ndim > values.ndim:
-        combined_weights = combined_weights.prod(-1, keepdim=True)
+    # if combined_weights.ndim > values.ndim:
+    #     combined_weights = combined_weights.prod(-1, keepdim=True)
     values = (combined_weights * values[..., None]).sum(-3)
     return values
