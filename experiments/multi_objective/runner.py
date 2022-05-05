@@ -184,22 +184,25 @@ def main(
             conformal_kwargs['alpha'] = max(1.0 / math.sqrt(all_inputs.size(0)), min_alpha)
             conformal_kwargs['temp'] = temp
             conformal_kwargs['max_grid_refinements'] = 0
+	    
+            # we use a normalized ref pt b/c we don't support transforms
+            norm_ref_pt = trans(bb_fn.ref_point)[0]
 
             if k == "ehvi":
                 with torch.no_grad():
                     pred = model.posterior(all_inputs).mean
                 partitioning = FastNondominatedPartitioning(
-                    ref_point=bb_fn.ref_point,
+                    ref_point=norm_ref_point,
                     Y=pred,
                 )
                 acqf = qExpectedHypervolumeImprovement(
-                    ref_point=bb_fn.ref_point,
+                    ref_point=norm_ref_point,
                     partitioning=partitioning,
                     **base_kwargs,
                 )
             elif k == "nehvi":
                 acqf = qNoisyExpectedHypervolumeImprovement(
-                    ref_point=bb_fn.ref_point,
+                    ref_point=norm_ref_point,
                     X_baseline=all_inputs,
                     prune_baseline=True,
                     **base_kwargs,
@@ -208,18 +211,18 @@ def main(
                 with torch.no_grad():
                     pred = model.posterior(all_inputs).mean
                 partitioning = FastNondominatedPartitioning(
-                    ref_point=bb_fn.ref_point,
+                    ref_point=norm_ref_point,
                     Y=pred,
                 )
                 acqf = qConformalExpectedHypervolumeImprovement(
-                    ref_point=bb_fn.ref_point,
+                    ref_point=norm_ref_point,
                     partitioning=partitioning,
                     **base_kwargs,
                     **conformal_kwargs,
                 )
             elif k == "cnehvi":
                 acqf = qConformalNoisyExpectedHypervolumeImprovement(
-                    ref_point=bb_fn.ref_point,
+                    ref_point=norm_ref_point,
                     X_baseline=all_inputs,
                     prune_baseline=True,
                     **base_kwargs,
