@@ -232,6 +232,7 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
             break
 
         if refine_step < max_grid_refinements:
+            conditioned_models.train() # delete pred caches before deletion.
             del conditioned_models
 
     min_accepted, target_grid, weights, conf_pred_mask, conditioned_models = best_result
