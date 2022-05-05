@@ -44,14 +44,18 @@ def conf_mask_to_bounds(target_grid, conf_pred_mask):
         conf_lb: (*q_batch_shape, q_batch_size, target_dim)
         conf_ub: (*q_batch_shape, q_batch_size, target_dim)
     """
-    out_shape = target_grid.shape[:-3] + target_grid.shape[-2:]
+    original_out_shape = target_grid.shape[:-3] + target_grid.shape[-2:]
     
     target_grid = target_grid.movedim(-1, 0)
     conf_pred_mask = conf_pred_mask.movedim(-1, 0)
     
+    # offset by 1d here from the original one
+    new_out_shape = target_grid.shape[:-2] + target_grid.shape[-1:]
+    
     # this flattens any structured q batches
     flat_tgt_grid = target_grid.flatten(0, -3)
     flat_pred_mask = conf_pred_mask.flatten(0, -3)
+    
     # now flatten across the target dim
     conf_ub = (
         torch.stack(
@@ -69,8 +73,13 @@ def conf_mask_to_bounds(target_grid, conf_pred_mask):
             ]
         )
     )
-    conf_lb = conf_lb.view(*out_shape)
-    conf_ub = conf_ub.view(*out_shape)
+    conf_lb = conf_lb.view(*new_out_shape)
+    conf_ub = conf_ub.view(*new_out_shape)
+    
+    # but this out shape doesn't align with our expected out shape
+    # so we move the target dim back
+    conf_lb = conf_lb.movedim(0, -1)
+    conf_ub = conf_ub.movedim(0, -1)
     return conf_lb, conf_ub
 
 
@@ -145,7 +154,6 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         assert target_grid.size(0) == grid_res
         target_grid = torch.movedim(target_grid, 0, -3)
         weights = torch.movedim(weights, 0, -3)
-        # print(target_grid.shape, refine_step, grid_res)
 
         conf_pred_mask, conditioned_models, q_conf_scores = conformal_gp_regression(
             model, inputs, target_grid, alpha, temp=temp
@@ -246,9 +254,6 @@ def conformal_gp_regression(
     expanded_inputs = test_inputs.unsqueeze(-3).expand(
         *[-1] * len(q_batch_shape), target_grid.shape[-3], -1, -1
     )  # (*q_batch_shape, num_grid_pts, q_batch_size, input_dim)
-#     if gp._aug_batch_shape is not torch.Size([]):
-#         expanded_inputs = expanded_inputs.unsqueeze(-2)
-#         expanded_inputs = expanded_inputs.repeat(*[1]*(len(q_batch_shape)+2), *gp._aug_batch_shape, 1)
         
     updated_gps = gp.condition_on_observations(expanded_inputs, target_grid)
     # get ready to compute the conformal scores
@@ -276,7 +281,6 @@ def conformal_gp_regression(
     posterior = updated_gps.posterior(train_inputs, observation_noise=True)
     post_var = est_train_post_var(updated_gps, observation_noise=True, target_dim=target_dim)
     pred_dist = torch.distributions.Normal(posterior.mean, post_var.sqrt())
-    # post_var = est_train_post_var(updated_gps, observation_noise=True)
     
     conf_scores = pred_dist.log_prob(train_labels)
     if target_dim == 1:
@@ -320,10 +324,6 @@ def conformal_gp_regression(
     )  # (*q_batch_shape, grid_size, q_batch_size)
     conf_pred_mask = torch.sigmoid((cum_weights - alpha) / temp)
 
-    # num_accepted = (conf_pred_mask >= 0.5).float().sum(-2)
-    # print(target_grid.shape)
-    # if torch.any(num_accepted < 2) and target_grid.shape[1] == 2048:
-    #     import pdb; pdb.set_trace()
     if target_dim > 1:
         conf_pred_mask = conf_pred_mask.transpose(-1, -2)
         q_conf_scores = q_conf_scores.transpose(-1, -2)
@@ -366,6 +366,7 @@ def assess_coverage(
             max_grid_refinements, grid_sampler, ratio_estimator
         )
         try:
+            # remove this targets when done!!
             conf_lb, conf_ub = conf_mask_to_bounds(target_grid, conf_pred_mask)
             conf_lb = conf_lb.squeeze(-2).to(targets)
             conf_ub = conf_ub.squeeze(-2).to(targets)

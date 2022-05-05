@@ -186,7 +186,7 @@ def main(
             conformal_kwargs['max_grid_refinements'] = 0
 	    
             # we use a normalized ref pt b/c we don't support transforms
-            norm_ref_pt = trans(bb_fn.ref_point)[0]
+            norm_ref_point = trans(bb_fn.ref_point)[0].squeeze() # should be 1d
 
             if k == "ehvi":
                 with torch.no_grad():
