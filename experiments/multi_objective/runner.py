@@ -9,14 +9,19 @@ from botorch.acquisition.multi_objective import (
     qExpectedHypervolumeImprovement,
     qNoisyExpectedHypervolumeImprovement,
 )
+from botorch.acquisition.monte_carlo import qNoisyExpectedImprovement
 from botorch import fit_gpytorch_model
 from botorch.sampling.samplers import IIDNormalSampler, SobolQMCNormalSampler
 from botorch.utils.multi_objective.box_decompositions.non_dominated import FastNondominatedPartitioning
 from botorch.utils.multi_objective.box_decompositions.dominated import DominatedPartitioning
+from botorch.utils.sampling import sample_simplex
+from botorch.utils.multi_objective.scalarization import get_chebyshev_scalarization
+from botorch.acquisition.objective import GenericMCObjective
 
 import sys
 sys.path.append("../../conformalbo/")
 from helpers import assess_coverage
+from acquisitions import qConformalNoisyExpectedImprovement
 from mobo_acquisitions import (
     qConformalNoisyExpectedHypervolumeImprovement,
     qConformalExpectedHypervolumeImprovement,
@@ -65,7 +70,7 @@ def main(
     bounds[1] += 1.
     print(f"function: {problem}, x bounds: {bounds}")
 
-    keys = ["cehvi", "cnehvi", "ehvi", "nehvi", "rnd"]
+    keys = ["cehvi", "cnehvi", "ehvi", "nehvi", "nparego", "cnparego", "rnd"]
     hv_dict = {k: [] for k in keys}
     coverage = {k: [] for k in keys}
 
@@ -205,6 +210,8 @@ def main(
                     ref_point=norm_ref_point,
                     X_baseline=all_inputs,
                     prune_baseline=True,
+                    incremental_nehvi=False,
+                    cache_root=False,
                     **base_kwargs,
                 )
             elif k == "cehvi":
@@ -225,15 +232,60 @@ def main(
                     ref_point=norm_ref_point,
                     X_baseline=all_inputs,
                     prune_baseline=True,
+                    incremental_nehvi=False,
+                    cache_root=False,
                     **base_kwargs,
                     **conformal_kwargs,
                 )
+            elif k == "nparego":
+                # here we need an acqf list b/c the chebyshev scalarization changes
+                # for each value
+                
+                with torch.no_grad():
+                    pred = model.posterior(all_inputs).mean
+                    
+                acq_func_list = []
+                for _ in range(optimize_acqf_kwargs["BATCH_SIZE"]):
+                    weights = sample_simplex(pred.shape[-1], device=device, dtype=dtype).squeeze()
+                    objective = GenericMCObjective(get_chebyshev_scalarization(weights=weights, Y=pred))
+                    acq_func = qNoisyExpectedImprovement(  # pyre-ignore: [28]
+                        objective=objective,
+                        X_baseline=all_inputs,
+                        prune_baseline=True,
+                        **base_kwargs,
+                    )
+                    acq_func_list.append(acq_func)
+            elif k == "cnparego":
+                # here we need an acqf list b/c the chebyshev scalarization changes
+                # for each value
+                
+                with torch.no_grad():
+                    pred = model.posterior(all_inputs).mean
+                    
+                acq_func_list = []
+                for _ in range(optimize_acqf_kwargs["BATCH_SIZE"]):
+                    weights = sample_simplex(pred.shape[-1], device=device, dtype=dtype).squeeze()
+                    objective = GenericMCObjective(get_chebyshev_scalarization(weights=weights, Y=pred))
+                    acq_func = qConformalNoisyExpectedImprovement(  # pyre-ignore: [28]
+                        objective=objective,
+                        X_baseline=all_inputs,
+                        prune_baseline=True,
+                        **base_kwargs,
+                        **conformal_kwargs,
+                    )
+                    acq_func_list.append(acq_func)
 
             # optimize acquisition
-            new_x, observed_obj, exact_obj = optimize_acqf_and_get_observation(
-                acqf, **optimize_acqf_kwargs
-            )
-            del acqf
+            if "parego" in k:
+                # TODO: optimize list function
+                new_x, observed_obj, exact_obj = optimize_acqf_and_get_observation(
+                    acq_func_list, is_list=True, **optimize_acqf_kwargs,
+                )
+            else:
+                new_x, observed_obj, exact_obj = optimize_acqf_and_get_observation(
+                    acqf, **optimize_acqf_kwargs
+                )
+                del acqf
             model.train()
             del model
             torch.cuda.empty_cache()

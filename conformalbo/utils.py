@@ -14,7 +14,7 @@ from botorch.test_functions.multi_objective import (
     CarSideImpact,
     ZDT2,
 )
-from botorch.optim import optimize_acqf
+from botorch.optim.optimize import optimize_acqf, optimize_acqf_list
 
 
 def parse():
@@ -144,10 +144,11 @@ def get_problem(problem, dim, num_objectives=1):
 def optimize_acqf_and_get_observation(
     acq_func,
     bounds,
-    BATCH_SIZE,
     fn,
+    BATCH_SIZE=1,
     outcome_constraint=None,
     noise_se=0.0,
+    is_list=False,
     NUM_RESTARTS=5,
     RAW_SAMPLES=128,
     is_poisson=False,
@@ -155,16 +156,25 @@ def optimize_acqf_and_get_observation(
 ):
     """Optimizes the acquisition function, and returns a new candidate and a noisy observation."""
 
+    optimizer = optimize_acqf_list if is_list else optimize_acqf
+    sequential = True if is_list else sequential # enforce sequential greedy opt
+    
+    kwargs = {
+        "acq_function_list" if is_list else "acq_function": acq_func,
+        "bounds": bounds,
+        "q": BATCH_SIZE,
+        "num_restarts": NUM_RESTARTS,
+        "raw_samples": RAW_SAMPLES,
+        "options": {"batch_limit": 5, "maxiter": 200},
+        "sequential": sequential,
+    }
+    if is_list:
+        kwargs.pop("q")
+        kwargs.pop("sequential")
+        
     # optimize
-    candidates, _ = optimize_acqf(
-        acq_function=acq_func,
-        bounds=bounds,
-        q=BATCH_SIZE,
-        num_restarts=NUM_RESTARTS,
-        raw_samples=RAW_SAMPLES,  # used for intialization heuristic
-        options={"batch_limit": 5, "maxiter": 200},
-        sequential=sequential,
-    )
+    candidates, _ = optimizer(**kwargs)
+    
     # observe new values
     new_x = candidates.detach()
     cube_loc = fn.bounds[0]

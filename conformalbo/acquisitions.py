@@ -67,11 +67,9 @@ class ConformalAcquisition(object):
         reshaped_x = X.unsqueeze(-3)
         reshaped_x = reshaped_x.expand(*[-1]*(X.ndim - 2), conf_pred_mask.size(-3), -1, -1)
         # standard forward pass using conditioned models
-        # print(reshaped_x.shape, "shaped of x going in")
         values = self._nonconformal_fwd(reshaped_x, conditioned_model)
         # integrate w.r.t. batch outcome
         res = _conformal_integration(values, conf_pred_mask, grid_logp, self.alpha, opt_mask)
-        # print(values.shape, res.shape)
 
         return res.view(*orig_batch_shape)
 
@@ -242,8 +240,5 @@ def _conformal_integration(values, conf_pred_mask, grid_logp, alpha, opt_mask):
         conf_weights = conf_weights / (scaling_factor + 1e-6)
 
     combined_weights = alpha * nonconf_weights + (1. - alpha) * combined_mask * conf_weights
-
-    # if combined_weights.ndim > values.ndim:
-    #     combined_weights = combined_weights.prod(-1, keepdim=True)
     values = (combined_weights * values[..., None]).sum(-3)
     return values
