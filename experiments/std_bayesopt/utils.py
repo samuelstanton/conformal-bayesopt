@@ -6,10 +6,9 @@ from gpytorch.constraints import Interval
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
 from botorch.models.transforms import Standardize, Normalize
+from botorch.models import SingleTaskGP
 from botorch.test_functions import Branin, Levy, Ackley
 from botorch.optim import optimize_acqf
-
-from helpers import ConformalSingleTaskGP
 
 
 def parse():
@@ -25,6 +24,7 @@ def parse():
     parser.add_argument("--min_alpha", type=float, default=0.05)
     parser.add_argument("--method", type=str, default="exact")
     parser.add_argument("--tgt_grid_res", type=int, default=64)
+    parser.add_argument("--temp", type=float, default=1e-2)
     parser.add_argument("--max_grid_refinements", type=int, default=4)
     return parser.parse_args()
 
@@ -34,7 +34,9 @@ def generate_initial_data(n, fn, NOISE_SE, device, dtype, is_poisson=False):
     train_x = torch.rand(
         n, fn.dim, device=device, dtype=dtype
     )  # * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]
-    exact_obj = fn(train_x * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]).unsqueeze(
+    cube_loc = fn.bounds[0]
+    cube_scale = fn.bounds[1] - fn.bounds[0]
+    exact_obj = fn(train_x * cube_scale + cube_loc).unsqueeze(
         -1
     )  # add output dimension
     # exact_con = outcome_constraint(train_x).unsqueeze(-1)  # add output dimension
@@ -95,32 +97,16 @@ def get_exact_model(
     x,
     y,
     yvar,
-    use_input_transform=True,
-    use_outcome_transform=True,
-    alpha=0.05,
-    tgt_grid_res=64,
-    max_grid_refinements=4,
     **kwargs
 ):
-    conformal_bounds = torch.tensor(
-        [[-3.0, 3.0]]
-    ).t()  # this can be standardized w/o worry?
-
-    model = ConformalSingleTaskGP(
+    model = SingleTaskGP(
         train_X=x,
         train_Y=y,
-        likelihood=GaussianLikelihood(noise_constraint=Interval(5e-4, 0.2))
-        if yvar is None
-        else None,
-        # outcome_transform=Standardize(y.shape[-1]) if use_outcome_transform else None,
-        # input_transform=Normalize(x.shape[-1]) if use_input_transform else None,
+        likelihood=GaussianLikelihood(noise_constraint=Interval(5e-2, 5e-1)),
         outcome_transform=None,
         input_transform=None,
-        alpha=alpha,
-        conformal_bounds=conformal_bounds,
-        tgt_grid_res=tgt_grid_res,
-        max_grid_refinements=max_grid_refinements,
-    ).to(x)
+    )
+
     if yvar is not None:
         model.likelihood.raw_noise.detach_()
         model.likelihood.noise = yvar.item()
@@ -143,8 +129,8 @@ def optimize_acqf_and_get_observation(
     fn,
     outcome_constraint=None,
     noise_se=0.0,
-    NUM_RESTARTS=10,
-    RAW_SAMPLES=512,
+    NUM_RESTARTS=5,
+    RAW_SAMPLES=128,
     is_poisson=False,
     sequential=False,
 ):
@@ -162,9 +148,11 @@ def optimize_acqf_and_get_observation(
     )
     # observe new values
     new_x = candidates.detach()
-    exact_obj = fn(new_x * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]).unsqueeze(
+    cube_loc = fn.bounds[0]
+    cube_scale = fn.bounds[1] - fn.bounds[0]
+    exact_obj = fn(new_x * cube_scale + cube_loc).unsqueeze(
         -1
     )  # add output dimension
 
-    new_obj = exact_obj + noise_se * torch.randn_like(exact_obj)
-    return new_x, new_obj
+    observed_obj = exact_obj + noise_se * torch.randn_like(exact_obj)
+    return new_x, observed_obj, exact_obj
