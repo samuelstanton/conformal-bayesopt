@@ -54,16 +54,16 @@ def initialize_noise_se(fn, noise_se, device, dtype):
     # random points ]
     
     # initializes noise standard erorrs
-    x = torch.rand(5000, fn.dim, device=device, dtype=dtype)
+    rand_x = torch.rand(5000, fn.dim, device=device, dtype=dtype)
     
     cube_loc = fn.bounds[0]
     cube_scale = fn.bounds[1] - fn.bounds[0]
     
-    exact_obj = fn(train_x * cube_scale + cube_loc)    
+    exact_obj = fn(rand_x * cube_scale + cube_loc)    
     if exact_obj.ndim == 1:
         exact_obj = exact_obj.unsqueeze(-1) # add output dimension if we need to
     
-    output_std = exact_obj.std(1)
+    output_std = exact_obj.std(0)
     return noise_se * output_std
 
 def initialize_model(
@@ -125,14 +125,14 @@ def get_exact_model(
     model = SingleTaskGP(
         train_X=x,
         train_Y=y,
-        likelihood=GaussianLikelihood(noise_constraint=Interval(5e-2, 5e-1)),
+        likelihood=GaussianLikelihood(noise_constraint=Interval(1e-4, 5e-1)),
         outcome_transform=None,
         input_transform=None,
     )
 
     if yvar is not None:
         model.likelihood.raw_noise.detach_()
-        model.likelihood.noise = yvar#.item()
+        model.likelihood.noise = yvar
     return model
 
 

@@ -31,6 +31,7 @@ from utils import (
     optimize_acqf_and_get_observation,
     update_random_observations,
     get_problem,
+    initialize_noise_se,
 )
 sys.path.append("../../")
 from lambo.utils import DataSplit, update_splits
@@ -74,15 +75,14 @@ def main(
     coverage = {k: [] for k in keys}
 
     # initialize noise se
-    noise_se = initialize_noise_se(bb_n, noise_se, device=device, dtype=dtype)
-    train_yvar = noise_se.pow(2.0)
+    problem_noise_se = initialize_noise_se(bb_fn, noise_se, device=device, dtype=dtype)
 
     # call helper functions to generate initial training data and initialize model
     (
         all_inputs,
         all_targets,
         best_actual_obj,
-    ) = generate_initial_data(num_init, bb_fn, noise_se, device, dtype)
+    ) = generate_initial_data(num_init, bb_fn, problem_noise_se, device, dtype)
 
     data_dict = {}
     for k in keys:
@@ -93,7 +93,7 @@ def main(
         "bounds": bounds,
         "BATCH_SIZE": batch_size,
         "fn": bb_fn,
-        "noise_se": noise_se,
+        "noise_se": problem_noise_se,
     }
 
     # run N_BATCH rounds of BayesOpt after the initial random batch
@@ -127,6 +127,7 @@ def main(
                 train_inputs,
                 train_targets,
                 method=method,
+                train_yvar=noise_se**2,
             )
             model.requires_grad_(True)
             fit_gpytorch_model(mll)
@@ -164,6 +165,7 @@ def main(
                 all_inputs,
                 all_targets,
                 method=method,
+                train_yvar=noise_se**2,
             )
             model.requires_grad_(True)
             fit_gpytorch_model(mll)

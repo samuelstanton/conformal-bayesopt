@@ -33,6 +33,7 @@ from utils import (
     optimize_acqf_and_get_observation,
     update_random_observations,
     get_problem,
+    initialize_noise_se,
 )
 sys.path.append("../../")
 from lambo.utils import DataSplit, update_splits
@@ -75,15 +76,16 @@ def main(
     coverage = {k: [] for k in keys}
 
     # initialize noise se
-    noise_se = initialize_noise_se(bb_n, noise_se, device=device, dtype=dtype)
-    train_yvar = noise_se.pow(2.0)
+    # due to our scaling, we want to distinguish b/w the noise added into the function
+    # and the amount of noise on a raw scale that we add in
+    problem_noise_se = initialize_noise_se(bb_fn, noise_se, device=device, dtype=dtype)
 
     # call helper functions to generate initial training data and initialize model
     (
         all_inputs,
         all_targets,
         _,
-    ) = generate_initial_data(num_init, bb_fn, noise_se, device, dtype)
+    ) = generate_initial_data(num_init, bb_fn, problem_noise_se, device, dtype)
 
     # initial hypervolumes
     bd = DominatedPartitioning(ref_point=bb_fn.ref_point, Y=all_targets)
@@ -98,7 +100,7 @@ def main(
         "bounds": bounds,
         "BATCH_SIZE": batch_size,
         "fn": bb_fn,
-        "noise_se": noise_se,
+        "noise_se": problem_noise_se,
     }
 
     # run N_BATCH rounds of BayesOpt after the initial random batch
@@ -113,7 +115,7 @@ def main(
             if k == "rnd":
                 # update random
                 _, all_targets = data_dict[k]
-                _, next_targets, _ = generate_initial_data(batch_size, bb_fn, noise_se, device, dtype)
+                _, next_targets, _ = generate_initial_data(batch_size, bb_fn, problem_noise_se, device, dtype)
                 all_targets = torch.cat((all_targets, next_targets))
                 
                 # update hypervolumes
@@ -137,6 +139,7 @@ def main(
                 train_inputs,
                 train_targets,
                 method=method,
+                train_yvar=noise_se**2, # here we want the scaled noise
             )
             model.requires_grad_(True)
             # TODO: support torch fits for mtgps
@@ -175,6 +178,7 @@ def main(
                 all_inputs,
                 all_targets,
                 method=method,
+                train_yvar=noise_se**2, # here we want the scaled noise
             )
             model.requires_grad_(True)
             fit_gpytorch_model(mll)
