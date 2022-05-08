@@ -62,13 +62,6 @@ class qConformalExpectedHypervolumeImprovement(ConformalAcquisition, qExpectedHy
         batch_shape = obj.shape[:-2]
         # this is input_batch_shape x cell x 1
         # the 1 is here for the conformal shapes
-#         areas_per_segment = torch.zeros(
-#             *batch_shape,
-#             self.cell_lower_bounds.shape[-2],
-#             1,
-#             dtype=obj.dtype,
-#             device=obj.device,
-#         )
         areas_per_segment = 0.
     
         cell_batch_ndim = self.cell_lower_bounds.ndim - 2

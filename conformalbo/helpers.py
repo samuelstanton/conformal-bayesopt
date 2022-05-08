@@ -8,7 +8,7 @@ from gpytorch.distributions import MultivariateNormal, MultitaskMultivariateNorm
 from gpytorch import lazify
 
 
-from botorch.sampling import SobolQMCNormalSampler, IIDNormalSampler
+from botorch.sampling import IIDNormalSampler
 from botorch.posteriors import GPyTorchPosterior
 
 import torchsort
@@ -143,7 +143,6 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     for refine_step in range(0, max_grid_refinements + 1):
         # construct target grid, conformal prediction mask
 
-        # sampler = SobolQMCNormalSampler(grid_res)
         sampler._sample_shape = torch.Size([grid_res])
         target_grid = sampler(y_post)
 
@@ -161,8 +160,8 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         target_dim = target_grid.shape[-1]
         if target_dim == 1:
             # reshape to (*q_batch_shape, grid_res, q_batch_size, target_dim)
-             conf_pred_mask = conf_pred_mask.unsqueeze(-1)  # create target dim
-             q_conf_scores = q_conf_scores.unsqueeze(-1)  # create target dim
+            conf_pred_mask = conf_pred_mask.unsqueeze(-1)  # create target dim
+            q_conf_scores = q_conf_scores.unsqueeze(-1)  # create target dim
 
         num_accepted = (conf_pred_mask >= 0.5).float().sum(-3)
         min_accepted = num_accepted.min()
@@ -359,14 +358,12 @@ def assess_coverage(
             (targets > cred_lb) * (targets < cred_ub)
         ).float().mean()
 
-        grid_sampler = SobolQMCNormalSampler(grid_res, resample=True)
-        # grid_sampler = IIDNormalSampler(grid_res, resample=True, collapse_batch_dims=False)
+        grid_sampler = IIDNormalSampler(grid_res, resample=True, batch_range = (0, -3))
         target_grid, _, conf_pred_mask, _ = construct_conformal_bands(
             model, inputs[:, None], alpha, temp, grid_res,
             max_grid_refinements, grid_sampler, ratio_estimator
         )
         try:
-            # remove this targets when done!!
             conf_lb, conf_ub = conf_mask_to_bounds(target_grid, conf_pred_mask)
             conf_lb = conf_lb.squeeze(-2).to(targets)
             conf_ub = conf_ub.squeeze(-2).to(targets)

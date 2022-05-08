@@ -37,7 +37,7 @@ class ConformalAcquisition(object):
         self.max_grid_refinements = max_grid_refinements
         self.ratio_estimator = ratio_estimator
         self.optimistic = optimistic
-        self.grid_sampler = SobolQMCNormalSampler(grid_res) if grid_sampler is None else grid_sampler
+        self.grid_sampler = IIDNormalSampler(grid_res) if grid_sampler is None else grid_sampler
 
     def _conformalize_model(self, X):
         if self.model is None:

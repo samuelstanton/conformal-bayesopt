@@ -74,8 +74,9 @@ def main(
     hv_dict = {k: [] for k in keys}
     coverage = {k: [] for k in keys}
 
-    # TODO check this
-    train_yvar = torch.tensor(noise_se**2, device=device, dtype=dtype)
+    # initialize noise se
+    noise_se = initialize_noise_se(bb_n, noise_se, device=device, dtype=dtype)
+    train_yvar = noise_se.pow(2.0)
 
     # call helper functions to generate initial training data and initialize model
     (
@@ -181,10 +182,11 @@ def main(
             trans.eval()
 
             # now prepare the acquisition
-            qmc_sampler = SobolQMCNormalSampler(num_samples=mc_samples)
+            batch_range = (0, -3) if k[0] == "c" else (0, -2)
+            sampler = IIDNormalSampler(num_samples=mc_samples, batch_range=batch_range)
             base_kwargs = dict(
                 model=model,
-                sampler=qmc_sampler,
+                sampler=sampler,
             )
             conformal_kwargs['alpha'] = max(1.0 / math.sqrt(all_inputs.size(0)), min_alpha)
             conformal_kwargs['temp'] = temp

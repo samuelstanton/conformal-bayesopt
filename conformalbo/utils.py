@@ -47,9 +47,24 @@ def generate_initial_data(n, fn, NOISE_SE, device, dtype, is_poisson=False):
         exact_obj = exact_obj.unsqueeze(-1) # add output dimension if we need to
     train_obj = exact_obj + NOISE_SE * torch.randn_like(exact_obj)
     best_observed_value = exact_obj.max().item()
-    print(train_x.shape, train_obj.shape)
     return train_x, train_obj, best_observed_value
 
+def initialize_noise_se(fn, noise_se, device, dtype):
+    # we initialize the noise se to [noise_se * the standard deviation of 5k
+    # random points ]
+    
+    # initializes noise standard erorrs
+    x = torch.rand(5000, fn.dim, device=device, dtype=dtype)
+    
+    cube_loc = fn.bounds[0]
+    cube_scale = fn.bounds[1] - fn.bounds[0]
+    
+    exact_obj = fn(train_x * cube_scale + cube_loc)    
+    if exact_obj.ndim == 1:
+        exact_obj = exact_obj.unsqueeze(-1) # add output dimension if we need to
+    
+    output_std = exact_obj.std(1)
+    return noise_se * output_std
 
 def initialize_model(
     train_x,
@@ -88,13 +103,14 @@ def initialize_model(
 
 
 def update_random_observations(
-    BATCH_SIZE, best_random, bounds, problem=lambda x: x, dim=6
+    BATCH_SIZE, best_random, bounds, problem=lambda x: x, dim=6, noise_se=0.1,
 ):
     """Simulates a random policy by taking a the current list of best values observed randomly,
     drawing a new random point, observing its value, and updating the list.
     """
     rand_x = torch.rand(BATCH_SIZE, dim).to(bounds) * (bounds[1] - bounds[0]) + bounds[0]
-    next_random_best = problem(rand_x).max().item()
+    # This eval needs to be noisy
+    next_random_best = problem(rand_x).max().item() + noise_se * torch.randn_like(exact_obj)
     best_random.append(max(best_random[-1], next_random_best))
     return best_random
 
