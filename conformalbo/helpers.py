@@ -14,25 +14,6 @@ from botorch.posteriors import GPyTorchPosterior
 import torchsort
 
 
-def generate_target_grid(grid_center, grid_scale, grid_res, tail_prob):
-    """
-    Create dense pointwise target grid
-    Args:
-        grid_center: (*q_batch_shape, q_batch_size, target_dim)
-        grid_scale: (*q_batch_shape, q_batch_size, target_dim)
-        grid_res: int
-        tail_prob: float
-    Returns:
-        target_grid: (*q_batch_shape, grid_res, q_batch_size, target_dim)
-    """
-    # TODO check target_dim > 1 case
-    cred_levels = np.linspace(tail_prob, 1 - tail_prob, grid_res)
-    std_factors = stats.norm.ppf(cred_levels)[:, None, None]  # (grid_res, 1, 1)
-    std_factors = torch.from_numpy(std_factors).to(grid_center)
-    target_grid = grid_center.unsqueeze(-3) + std_factors * grid_scale.unsqueeze(-3)
-    return target_grid
-
-
 def conf_mask_to_bounds(target_grid, conf_pred_mask):
     """
     Convert dense pointwise target grid and corresponding conformal mask
@@ -112,27 +93,6 @@ def conf_mask_to_bounds(target_grid, conf_pred_mask):
     return conf_lb, conf_ub
 
 
-def sample_grid_points(grid_lb, grid_ub, num_samples):
-    """
-    Convert pointwise conformal prediction intervals to uniformly
-    sampled grid points
-    Args:
-        grid_lb: (*q_batch_shape, q_batch_size, target_dim)
-        grid_ub: (*q_batch_shape, q_batch_size, target_dim)
-        num_samples: int
-    Returns:
-        grid_samples: (*q_batch_shape, num_samples, q_batch_size, target_dim)
-    """
-    q_batch_shape = grid_lb.shape[:-2]
-    q_batch_size = grid_lb.size(-2)
-    grid_range = grid_ub - grid_lb
-    unif_samples = torch.rand(
-        *q_batch_shape, num_samples, q_batch_size, 1
-    ).to(grid_lb)
-    grid_samples = grid_lb.unsqueeze(-3) + unif_samples * grid_range.unsqueeze(-3)
-    return grid_samples
-
-
 def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_refinements, sampler,
                               ratio_estimator=None):
     """
@@ -155,17 +115,12 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     assert grid_res >= 2, "grid resolution must be at least 2"
     q_batch_size = inputs.size(-2)
 
-    # dummy q-batch dimension
-    # inputs = inputs.unsqueeze(-2)
-
     # initialize target grid with pointwise credible sets
     model.eval()
     with torch.no_grad():
         y_post = model.posterior(inputs, observation_noise=True)
 
     # setup
-    # grid_center = y_mean
-    # grid_scale = y_std
     conditioned_models = None
     best_result = (-1, None, None, None, None)
     best_refine_step = 0
@@ -394,9 +349,10 @@ def assess_coverage(
             conf_lb = conf_lb.squeeze(-2).to(targets)
             conf_ub = conf_ub.squeeze(-2).to(targets)
 
+            # nanmean returns all nans if all values are nan
             conformal_coverage = (
                 (targets > conf_lb) * (targets < conf_ub)
-            ).float().mean()
+            ).float().nanmean()
         except:
             print("Warning heldout set coverage evaluation failed. Returning nan")
             conformal_coverage = torch.tensor(float('nan'))
