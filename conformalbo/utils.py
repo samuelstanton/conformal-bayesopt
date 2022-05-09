@@ -110,7 +110,9 @@ def update_random_observations(
     """
     rand_x = torch.rand(BATCH_SIZE, dim).to(bounds) * (bounds[1] - bounds[0]) + bounds[0]
     # This eval needs to be noisy
-    next_random_best = problem(rand_x).max().item() + noise_se * torch.randn_like(exact_obj)
+    rand_y = problem(rand_x)
+    rand_y += noise_se * torch.randn_like(rand_y)
+    next_random_best = rand_y.max().item()
     best_random.append(max(best_random[-1], next_random_best))
     return best_random
 

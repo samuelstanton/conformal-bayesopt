@@ -108,7 +108,8 @@ def main(
             if k == "rnd":
                 # update random
                 best_observed[k] = update_random_observations(
-                    batch_size, best_observed[k], bb_fn.bounds, bb_fn, dim=bounds.shape[1]
+                    batch_size, best_observed[k], bb_fn.bounds, bb_fn, dim=bounds.shape[1],
+                    noise_se=problem_noise_se,
                 )
                 continue
 
