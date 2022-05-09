@@ -13,8 +13,17 @@ from botorch.acquisition.monte_carlo import (
 from botorch.acquisition.knowledge_gradient import qKnowledgeGradient
 from botorch.acquisition.objective import IdentityMCObjective
 from botorch import fit_gpytorch_model
-from botorch.sampling.samplers import IIDNormalSampler, SobolQMCNormalSampler
+from botorch.sampling.samplers import IIDNormalSampler
 
+import sys
+sys.path.append("../../conformalbo/")
+from helpers import assess_coverage
+from acquisitions import (
+    qConformalExpectedImprovement,
+    qConformalNoisyExpectedImprovement,
+    qConformalUpperConfidenceBound,
+    qConformalKnowledgeGradient,
+)
 from utils import (
     generate_initial_data,
     initialize_model,
@@ -22,10 +31,9 @@ from utils import (
     optimize_acqf_and_get_observation,
     update_random_observations,
     get_problem,
+    initialize_noise_se,
 )
-from helpers import assess_coverage
-from acquisitions import *
-
+sys.path.append("../../")
 from lambo.utils import DataSplit, update_splits
 
 
@@ -66,14 +74,15 @@ def main(
     best_observed = {k: [] for k in keys}
     coverage = {k: [] for k in keys}
 
-    train_yvar = torch.tensor(noise_se**2, device=device, dtype=dtype)
+    # initialize noise se
+    problem_noise_se = initialize_noise_se(bb_fn, noise_se, device=device, dtype=dtype)
 
     # call helper functions to generate initial training data and initialize model
     (
         all_inputs,
         all_targets,
         best_actual_obj,
-    ) = generate_initial_data(num_init, bb_fn, noise_se, device, dtype)
+    ) = generate_initial_data(num_init, bb_fn, problem_noise_se, device, dtype)
 
     data_dict = {}
     for k in keys:
@@ -84,7 +93,7 @@ def main(
         "bounds": bounds,
         "BATCH_SIZE": batch_size,
         "fn": bb_fn,
-        "noise_se": noise_se,
+        "noise_se": problem_noise_se,
     }
 
     # run N_BATCH rounds of BayesOpt after the initial random batch
@@ -99,7 +108,8 @@ def main(
             if k == "rnd":
                 # update random
                 best_observed[k] = update_random_observations(
-                    batch_size, best_observed[k], bb_fn.bounds, bb_fn, dim=bounds.shape[1]
+                    batch_size, best_observed[k], bb_fn.bounds, bb_fn, dim=bounds.shape[1],
+                    noise_se=problem_noise_se,
                 )
                 continue
 
@@ -118,6 +128,7 @@ def main(
                 train_inputs,
                 train_targets,
                 method=method,
+                train_yvar=noise_se**2,
             )
             model.requires_grad_(True)
             fit_gpytorch_model(mll)
@@ -155,6 +166,7 @@ def main(
                 all_inputs,
                 all_targets,
                 method=method,
+                train_yvar=noise_se**2,
             )
             model.requires_grad_(True)
             fit_gpytorch_model(mll)
@@ -162,10 +174,11 @@ def main(
             trans.eval()
 
             # now prepare the acquisition
-            qmc_sampler = SobolQMCNormalSampler(num_samples=mc_samples)
+            batch_range = (0, -3) if k[0] == "c" else (0, -2)
+            sampler = IIDNormalSampler(num_samples=mc_samples, batch_range=batch_range)
             base_kwargs = dict(
                 model=model,
-                sampler=qmc_sampler,
+                sampler=sampler,
             )
             conformal_kwargs['alpha'] = max(1.0 / math.sqrt(all_inputs.size(0)), min_alpha)
             conformal_kwargs['temp'] = temp
@@ -193,7 +206,7 @@ def main(
                     # current_value=trans(all_targets)[0].max(),
                     num_fantasies=None,
                     objective=IdentityMCObjective(),
-                    inner_sampler=SobolQMCNormalSampler(mc_samples),
+                    inner_sampler=IIDNormalSampler(mc_samples),
                 )
             elif k == "cei":
                 acqf = qConformalExpectedImprovement(
@@ -222,7 +235,7 @@ def main(
                     # current_value=trans(all_targets)[0].max(),
                     num_fantasies=None,
                     objective=IdentityMCObjective(),
-                    inner_sampler=SobolQMCNormalSampler(mc_samples),
+                    inner_sampler=IIDNormalSampler(mc_samples, batch_range=(0, -3)),
                 )
 
             # optimize acquisition
@@ -234,22 +247,6 @@ def main(
             del model
             torch.cuda.empty_cache()
         
-            # inputs = torch.cat([inputs, new_x])
-            # objective = torch.cat([objective, new_obj])
-
-            # best_observed[k].append(objective.max().item())
-            # # prepare new model
-            # alpha = max(1.0 / math.sqrt(inputs.size(-2)), min_alpha)
-            # mll, model, trans = initialize_model(
-            #     inputs,
-            #     objective,
-            #     method=method,
-            #     alpha=alpha,
-            #     tgt_grid_res=tgt_grid_res,
-            # )
-            # mll_model_dict[k] = (mll, model, trans)
-            # data_dict[k] = inputs, objective
-            # print(torch.cuda.memory_reserved() / 1024**3)
             best_observed[k].append(
                 max(best_observed[k][-1], exact_obj.max().item())
             )
