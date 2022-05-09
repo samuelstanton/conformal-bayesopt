@@ -65,10 +65,10 @@ def conf_mask_to_bounds(target_grid, conf_pred_mask):
                 else:
                     lower_bound = grid[grid_lb]
 
-                if grid_ub != mask.shape[0] -1:
-                    const_upper_term = (0.5 - mask[grid_ub]) * (grid[grid_ub+1] - grid[grid_ub])\
-                        / (mask[grid_ub+1] - mask[grid_ub])
-                    upper_bound = grid[grid_lb] + const_upper_term
+                if grid_ub != mask.shape[0] - 1:
+                    const_upper_term = (0.5 - mask[grid_ub]) * (grid[grid_ub + 1] - grid[grid_ub])\
+                        / (mask[grid_ub + 1] - mask[grid_ub])
+                    upper_bound = grid[grid_ub] + const_upper_term
                 else:
                     upper_bound = grid[grid_ub]
                 
@@ -82,7 +82,7 @@ def conf_mask_to_bounds(target_grid, conf_pred_mask):
     
     conf_lb = torch.stack(dim_lb_list)
     conf_ub = torch.stack(dim_ub_list)
-    
+
     conf_lb = conf_lb.view(*new_out_shape)
     conf_ub = conf_ub.view(*new_out_shape)
     
@@ -339,7 +339,7 @@ def assess_coverage(
             (targets > cred_lb) * (targets < cred_ub)
         ).float().mean()
 
-        grid_sampler = IIDNormalSampler(grid_res, resample=True, batch_range = (0, -3))
+        grid_sampler = IIDNormalSampler(grid_res, resample=True, collapse_batch_dims=False)
         target_grid, _, conf_pred_mask, _ = construct_conformal_bands(
             model, inputs[:, None], alpha, temp, grid_res,
             max_grid_refinements, grid_sampler, ratio_estimator
