@@ -129,7 +129,7 @@ def get_exact_model(
         train_Y=y,
         likelihood=GaussianLikelihood(
             noise_constraint=Interval(1e-4, 5e-1),
-            batch_shape = torch.Size((y.shape[-1],)),
+            batch_shape = torch.Size((y.shape[-1],)) if y.shape[-1] > 1 else torch.Size(),
         ),
         outcome_transform=None,
         input_transform=None,
