@@ -336,10 +336,10 @@ def assess_coverage(
         cred_ub = y_mean + std_scale * y_std
 
         std_coverage = (
-            (targets > cred_lb) * (targets < cred_ub)
+            (targets >= cred_lb) * (targets <= cred_ub)
         ).float().mean()
 
-        grid_sampler = IIDNormalSampler(grid_res, resample=True, collapse_batch_dims=False)
+        grid_sampler = IIDNormalSampler(grid_res, resample=False, collapse_batch_dims=False)
         target_grid, _, conf_pred_mask, _ = construct_conformal_bands(
             model, inputs[:, None], alpha, temp, grid_res,
             max_grid_refinements, grid_sampler, ratio_estimator
@@ -351,7 +351,7 @@ def assess_coverage(
 
             # nanmean returns all nans if all values are nan
             conformal_coverage = (
-                (targets > conf_lb) * (targets < conf_ub)
+                (targets >= conf_lb) * (targets <= conf_ub)
             ).float().nanmean()
         except:
             print("Warning heldout set coverage evaluation failed. Returning nan")

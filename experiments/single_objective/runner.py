@@ -206,7 +206,7 @@ def main(
                     # current_value=trans(all_targets)[0].max(),
                     num_fantasies=None,
                     objective=IdentityMCObjective(),
-                    inner_sampler=SobolQMCNormalSampler(mc_samples),
+                    inner_sampler=IIDNormalSampler(mc_samples),
                 )
             elif k == "cei":
                 acqf = qConformalExpectedImprovement(
@@ -235,7 +235,7 @@ def main(
                     # current_value=trans(all_targets)[0].max(),
                     num_fantasies=None,
                     objective=IdentityMCObjective(),
-                    inner_sampler=SobolQMCNormalSampler(mc_samples, batch_range=(0, -3)),
+                    inner_sampler=IIDNormalSampler(mc_samples, batch_range=(0, -3)),
                 )
 
             # optimize acquisition
