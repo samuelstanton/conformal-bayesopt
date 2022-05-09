@@ -14,25 +14,6 @@ from botorch.posteriors import GPyTorchPosterior
 import torchsort
 
 
-def generate_target_grid(grid_center, grid_scale, grid_res, tail_prob):
-    """
-    Create dense pointwise target grid
-    Args:
-        grid_center: (*q_batch_shape, q_batch_size, target_dim)
-        grid_scale: (*q_batch_shape, q_batch_size, target_dim)
-        grid_res: int
-        tail_prob: float
-    Returns:
-        target_grid: (*q_batch_shape, grid_res, q_batch_size, target_dim)
-    """
-    # TODO check target_dim > 1 case
-    cred_levels = np.linspace(tail_prob, 1 - tail_prob, grid_res)
-    std_factors = stats.norm.ppf(cred_levels)[:, None, None]  # (grid_res, 1, 1)
-    std_factors = torch.from_numpy(std_factors).to(grid_center)
-    target_grid = grid_center.unsqueeze(-3) + std_factors * grid_scale.unsqueeze(-3)
-    return target_grid
-
-
 def conf_mask_to_bounds(target_grid, conf_pred_mask):
     """
     Convert dense pointwise target grid and corresponding conformal mask
@@ -48,31 +29,60 @@ def conf_mask_to_bounds(target_grid, conf_pred_mask):
     
     target_grid = target_grid.movedim(-1, 0)
     conf_pred_mask = conf_pred_mask.movedim(-1, 0)
-    
+
+    # lets do this slow first
+    # we iterate over the traget dims
+    dim_lb_list, dim_ub_list = [], []
+    for dim_target_grid, dim_conf_pred_mask in zip(target_grid, conf_pred_mask):
+        # we assume only q = 1
+        flat_tgt_grid = dim_target_grid.squeeze(-1) 
+        flat_pred_mask = dim_conf_pred_mask.squeeze(-1)
+        
+        # now we sort the grid indices
+        sorted_flat_tgt_grid, sorted_flat_inds = torch.sort(flat_tgt_grid, -1, descending=False)
+        sorted_pred_mask = torch.stack([ff[ii] for ff, ii in zip(flat_pred_mask, sorted_flat_inds)])
+        
+        # iterate over the sorted 
+        lb_list, ub_list = [], []
+        for grid, mask in zip(sorted_flat_tgt_grid, sorted_pred_mask):
+            inds = torch.where(mask >= 0.5)[0]
+            
+            if len(inds) == 0:
+                tsr_nan = torch.ones([1]).to(mask) / 0.
+                lb_list.append(tsr_nan)
+                ub_list.append(tsr_nan)
+            else:
+                
+                # select first and last indices
+                grid_ub = inds[-1]
+                grid_lb = inds[0]
+
+                # now we interpolate, we want the x where y == 0.5
+                if grid_lb != 0:
+                    const_lower_term = (0.5 - mask[grid_lb - 1]) * (grid[grid_lb] - grid[grid_lb - 1])\
+                        / (mask[grid_lb] - mask[grid_lb - 1])
+                    lower_bound = grid[grid_lb - 1] + const_lower_term
+                else:
+                    lower_bound = grid[grid_lb]
+
+                if grid_ub != mask.shape[0] - 1:
+                    const_upper_term = (0.5 - mask[grid_ub]) * (grid[grid_ub + 1] - grid[grid_ub])\
+                        / (mask[grid_ub + 1] - mask[grid_ub])
+                    upper_bound = grid[grid_ub] + const_upper_term
+                else:
+                    upper_bound = grid[grid_ub]
+                
+                lb_list.append(lower_bound.view(-1))
+                ub_list.append(upper_bound.view(-1))
+        dim_lb_list.append(torch.stack(lb_list))
+        dim_ub_list.append(torch.stack(ub_list))
+
     # offset by 1d here from the original one
     new_out_shape = target_grid.shape[:-2] + target_grid.shape[-1:]
     
-    # this flattens any structured q batches
-    flat_tgt_grid = target_grid.flatten(0, -3)
-    flat_pred_mask = conf_pred_mask.flatten(0, -3)
-    
-    # now flatten across the target dim
-    conf_ub = (
-        torch.stack(
-            [
-                grid[mask >= 0.5].max(0)[0]
-                for grid, mask in zip(flat_tgt_grid, flat_pred_mask)
-            ]
-        )
-    )
-    conf_lb = (
-        torch.stack(
-            [
-                grid[mask >= 0.5].min(0)[0]
-                for grid, mask in zip(flat_tgt_grid, flat_pred_mask)
-            ]
-        )
-    )
+    conf_lb = torch.stack(dim_lb_list)
+    conf_ub = torch.stack(dim_ub_list)
+
     conf_lb = conf_lb.view(*new_out_shape)
     conf_ub = conf_ub.view(*new_out_shape)
     
@@ -81,27 +91,6 @@ def conf_mask_to_bounds(target_grid, conf_pred_mask):
     conf_lb = conf_lb.movedim(0, -1)
     conf_ub = conf_ub.movedim(0, -1)
     return conf_lb, conf_ub
-
-
-def sample_grid_points(grid_lb, grid_ub, num_samples):
-    """
-    Convert pointwise conformal prediction intervals to uniformly
-    sampled grid points
-    Args:
-        grid_lb: (*q_batch_shape, q_batch_size, target_dim)
-        grid_ub: (*q_batch_shape, q_batch_size, target_dim)
-        num_samples: int
-    Returns:
-        grid_samples: (*q_batch_shape, num_samples, q_batch_size, target_dim)
-    """
-    q_batch_shape = grid_lb.shape[:-2]
-    q_batch_size = grid_lb.size(-2)
-    grid_range = grid_ub - grid_lb
-    unif_samples = torch.rand(
-        *q_batch_shape, num_samples, q_batch_size, 1
-    ).to(grid_lb)
-    grid_samples = grid_lb.unsqueeze(-3) + unif_samples * grid_range.unsqueeze(-3)
-    return grid_samples
 
 
 def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_refinements, sampler,
@@ -126,17 +115,12 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     assert grid_res >= 2, "grid resolution must be at least 2"
     q_batch_size = inputs.size(-2)
 
-    # dummy q-batch dimension
-    # inputs = inputs.unsqueeze(-2)
-
     # initialize target grid with pointwise credible sets
     model.eval()
     with torch.no_grad():
         y_post = model.posterior(inputs, observation_noise=True)
 
     # setup
-    # grid_center = y_mean
-    # grid_scale = y_std
     conditioned_models = None
     best_result = (-1, None, None, None, None)
     best_refine_step = 0
@@ -180,20 +164,17 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         diff = accept_ratio - 0.5
         scale_exp = 2. / q_batch_size  # volume is exponential in the batch size
         covar_scale = 1. + diff.sign() * diff.abs().pow(scale_exp)
-        covar_scale = covar_scale.squeeze(-1)  # drop target dim
-
-        # covariance matrix has extra last dimension (*batch_shape, n, n)
-        if target_dim == 1:
-            covar_scale = covar_scale.unsqueeze(-1)
 
         # warning! evaluating bc of weird GPyTorch lazy tensor broadcasting bug
         grid_covar = y_post.mvn.lazy_covariance_matrix.evaluate().contiguous()
+        
+        # reshape as (*batch_shape, n, 1)
+        # in both batched mt and single task cases
+        covar_scale = covar_scale.reshape(*grid_covar.shape[:-1], 1)
+        
         rescale_grid = False
         if min_accepted < 2 or max_accepted > grid_res - 2:
-            # batched mt case
-            if covar_scale.shape[-1] != grid_covar.shape[-1]:
-                covar_scale = covar_scale.reshape(*grid_covar.shape[:-1], 1)
-            grid_covar = (covar_scale * grid_covar)
+            grid_covar = covar_scale * grid_covar
             rescale_grid = True
 
         refine_grid = False
@@ -358,7 +339,7 @@ def assess_coverage(
             (targets > cred_lb) * (targets < cred_ub)
         ).float().mean()
 
-        grid_sampler = IIDNormalSampler(grid_res, resample=True, batch_range = (0, -3))
+        grid_sampler = IIDNormalSampler(grid_res, resample=True, collapse_batch_dims=False)
         target_grid, _, conf_pred_mask, _ = construct_conformal_bands(
             model, inputs[:, None], alpha, temp, grid_res,
             max_grid_refinements, grid_sampler, ratio_estimator
@@ -368,9 +349,10 @@ def assess_coverage(
             conf_lb = conf_lb.squeeze(-2).to(targets)
             conf_ub = conf_ub.squeeze(-2).to(targets)
 
+            # nanmean returns all nans if all values are nan
             conformal_coverage = (
                 (targets > conf_lb) * (targets < conf_ub)
-            ).float().mean()
+            ).float().nanmean()
         except:
             print("Warning heldout set coverage evaluation failed. Returning nan")
             conformal_coverage = torch.tensor(float('nan'))

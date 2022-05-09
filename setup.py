@@ -13,6 +13,7 @@ else:
 
 desc = "Code to reproduce experiments from Accelerating Bayesian Optimization for Protein Design" \
        "with Denoising Autoencoders."
+packages = ["lambo", "experiments", "conformalbo"]
 
 setup(
     name="lambo",
@@ -24,7 +25,7 @@ setup(
     author_email="ss13641@nyu.edu",
     url="https://github.com/samuelstanton/lambo.git",
     license="Apache-2.0",
-    packages=["lambo", "experiments"],
+    packages=packages,
     include_package_data=True,
     classifiers=[
         "Development Status :: 3",
