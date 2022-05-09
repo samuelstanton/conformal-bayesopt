@@ -39,7 +39,7 @@ def generate_initial_data(n, fn, NOISE_SE, device, dtype, is_poisson=False):
     # generate training data
     train_x = torch.rand(
         n, fn.dim, device=device, dtype=dtype
-    )  # * (fn.bounds[1] - fn.bounds[0]) + fn.bounds[0]
+    ) 
     cube_loc = fn.bounds[0]
     cube_scale = fn.bounds[1] - fn.bounds[0]
     exact_obj = fn(train_x * cube_scale + cube_loc)
@@ -125,7 +125,10 @@ def get_exact_model(
     model = SingleTaskGP(
         train_X=x,
         train_Y=y,
-        likelihood=GaussianLikelihood(noise_constraint=Interval(1e-4, 5e-1)),
+        likelihood=GaussianLikelihood(
+            noise_constraint=Interval(1e-4, 5e-1),
+            batch_shape = torch.Size((y.shape[-1],)),
+        ),
         outcome_transform=None,
         input_transform=None,
     )
