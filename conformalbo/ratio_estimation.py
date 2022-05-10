@@ -1,4 +1,3 @@
-import torch
 from torch import nn
 import numpy as np
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -14,7 +13,7 @@ from botorch.optim.initializers import (
     gen_batch_initial_conditions,
     gen_one_shot_kg_initial_conditions,
 )
-from experiments.std_bayesopt.optim import SGLD
+from conformalbo.optim import SGLD
 
 from lambo.utils import DataSplit, update_splits, safe_np_cat
 
@@ -36,8 +35,8 @@ def optimize_acqf_sgld(
     sequential: bool = False,
     warmup_steps: int = 20,
     sgld_steps: int = 100,
-    lr: float = 1e-2,
-    temperature: float = .1,
+    lr: float = 1e-3,
+    temperature: float = 1e-2,
     **kwargs: Any,
 ) -> Tuple[Tensor, Tensor]:
     r"""Generate a set of candidates via multi-start optimization.
@@ -192,61 +191,56 @@ def optimize_acqf_sgld(
     batch_limit: int = options.get(
         "batch_limit", num_restarts if not nonlinear_inequality_constraints else 1
     )
-    batch_candidates_list: List[Tensor] = []
-    batch_acq_values_list: List[Tensor] = []
-    batched_ics = batch_initial_conditions.split(batch_limit)
-    for i, batched_ics_ in enumerate(batched_ics):
-        batched_ics_ = batched_ics_.requires_grad_(True)
-        sgld = SGLD([batched_ics_], lr=lr, momentum=.9, temperature=temperature)
+    batched_ics = batch_initial_conditions.detach().clone().split(batch_limit)
 
-        iterates = ([], [])
-        for _s in range(sgld_steps):
-            sgld.zero_grad()
+    # collect SGLD iterates, bootstrap ratio estimator
+    sgld_optimizers = [
+        SGLD([ic_batch], lr=lr, momentum=.1, temperature=temperature) for ic_batch in batched_ics
+    ]
+    sgld_iterates = [
+        [] for _ in batched_ics
+    ]
+    for _s in range(sgld_steps):
+        for batch_idx, (ic_batch, batch_optimizer) in enumerate(zip(batched_ics, sgld_optimizers)):
+            ic_batch.requires_grad_(True)
+            batched_acq_values_ = acq_function(ic_batch)
 
-            batched_acq_values_ = acq_function(batched_ics_)
             if _s >= warmup_steps:
-                iterates[0].append(batched_ics_.detach())
-                iterates[1].append(batched_acq_values_.detach())
+                sgld_iterates[batch_idx].append(ic_batch.detach().clone())
                 if callable(options.get('callback')):
-                    options.get('callback')(batched_ics_.detach().cpu())
+                    options.get('callback')(ic_batch.detach().clone().cpu())
 
             if _s < (sgld_steps - 1):
+                batch_optimizer.zero_grad()
                 neg_log_density = -batched_acq_values_.sum()
-                neg_log_density.backward()
-                sgld.step()
-        
-            # with torch.no_grad():
-            #     batch_candidates_curr, batch_acq_values_curr = batched_ics_.detach(), acq_function(batched_ics_.detach())
+                lb_violation = torch.max(
+                    2 * (torch.sigmoid((bounds[0] - ic_batch) / 1.) - 0.5),
+                    torch.zeros_like(ic_batch),
+                ).sum()
+                ub_violation = torch.max(
+                    2 * (torch.sigmoid((ic_batch - bounds[1]) / 1.) - 0.5),
+                    torch.zeros_like(ic_batch),
+                ).sum()
+                loss = neg_log_density + 1e2 * (lb_violation + ub_violation)
+                loss.backward()
+                batch_optimizer.step()
+    batched_iterates = [torch.stack(iterates) for iterates in sgld_iterates]
+    batch_candidates = torch.cat(batched_iterates, dim=1)
 
-            # assert not batch_candidates_curr.requires_grad
-
-            # optimize using random restart optimization
-            # batch_candidates_curr, batch_acq_values_curr = gen_candidates_scipy(
-            #     initial_conditions=batched_ics_,
-            #     acquisition_function=acq_function,
-            #     lower_bounds=bounds[0],
-            #     upper_bounds=bounds[1],
-            #     options={k: v for k, v in options.items() if k not in INIT_OPTION_KEYS},
-            #     inequality_constraints=inequality_constraints,
-            #     equality_constraints=equality_constraints,
-            #     nonlinear_inequality_constraints=nonlinear_inequality_constraints,
-            #     fixed_features=fixed_features,
-            # )
-
-        batch_candidates_list.append(torch.stack(iterates[0]))
-        batch_acq_values_list.append(torch.stack(iterates[1]))
-        logger.info(f"Generated candidate batch {i+1} of {len(batched_ics)}.")
-    batch_candidates = torch.cat(batch_candidates_list, dim=1)
-    batch_acq_values = torch.cat(batch_acq_values_list, dim=1)
-    # print(batch_candidates.shape)
+    # final evaluation
+    with torch.no_grad():
+        batch_shape = batch_candidates.shape[:-2]
+        flat_cands = batch_candidates.flatten(0, -3)
+        batched_acq_vals = [
+            acq_function(cand_batch) for cand_batch in flat_cands.split(batch_limit)
+        ]
+        flat_acq_vals = torch.cat(batched_acq_vals)
+        batch_acq_values = flat_acq_vals.view(*batch_shape)
 
     if post_processing_func is not None:
         batch_candidates = post_processing_func(batch_candidates)
 
     if return_best_only:
-        flat_cands = batch_candidates.flatten(0, -3)
-        flat_acq_vals = batch_acq_values.flatten()
-
         # in bounds elementwise?
         in_bounds = (flat_cands >= bounds[0]).prod(-1) * (flat_cands <= bounds[1]).prod(-1)
         # in bounds batchwise?
@@ -316,10 +310,12 @@ class RatioEstimator(nn.Module):
             # )
             self.recompute_emp_prior()
 
-    def __init__(self, in_size=1, device=None):
+    def __init__(self, in_size=1, device=None, dtype=None):
         super().__init__()
 
         self.device = device
+        self.dtype = dtype
+        self.in_size = in_size
         self.dataset = RatioEstimator._Dataset()
 
         ## Remains uniform, when untrained.
@@ -329,7 +325,7 @@ class RatioEstimator(nn.Module):
             nn.Linear(64, 64),
             nn.ReLU(),
             nn.Linear(64, 1),
-        ).to(device)
+        ).to(device=device, dtype=dtype)
         # self.classifier = nn.Sequential(
         #     nn.Linear(in_size, 1),
         # )
@@ -350,10 +346,10 @@ class RatioEstimator(nn.Module):
     def optimize_callback(self, xk):
         if isinstance(xk, np.ndarray):
             xk = torch.from_numpy(xk)
-        xk = xk.reshape(-1, 1)
+        xk = xk.reshape(-1, self.in_size)
         # xk.add_(0.1 * torch.randn_like(xk))
 
-        yk = torch.ones(len(xk), 1)
+        yk = torch.ones(xk.size(0), 1)
 
         self.dataset._update_splits(DataSplit(xk, yk))
 
@@ -369,12 +365,13 @@ class RatioEstimator(nn.Module):
                 )
             )
             loader = torch.utils.data.DataLoader(
-                self.dataset, shuffle=True, batch_size=64
+                self.dataset, shuffle=True, batch_size=num_total
             )
 
-            for _ in range(4):
+            for _ in range(2):
                 X, y = next(iter(loader))
-                X, y = X.to(self.device).float(), y.to(self.device)
+                X = X.to(device=self.device, dtype=self.dtype)
+                y = y.to(device=self.device, dtype=self.dtype)
                 self.optim.zero_grad()
                 loss = loss_fn(self.classifier(X), y)
                 loss.backward()

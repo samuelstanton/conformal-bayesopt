@@ -16,6 +16,8 @@ from botorch.test_functions.multi_objective import (
 )
 from botorch.optim.optimize import optimize_acqf, optimize_acqf_list
 
+from ratio_estimation import optimize_acqf_sgld
+
 
 def parse():
     parser = argparse.ArgumentParser()
@@ -177,9 +179,6 @@ def optimize_acqf_and_get_observation(
 ):
     """Optimizes the acquisition function, and returns a new candidate and a noisy observation."""
 
-    optimizer = optimize_acqf_list if is_list else optimize_acqf
-    sequential = True if is_list else sequential # enforce sequential greedy opt
-    
     kwargs = {
         "acq_function_list" if is_list else "acq_function": acq_func,
         "bounds": bounds,
@@ -189,10 +188,18 @@ def optimize_acqf_and_get_observation(
         "options": {"batch_limit": 5, "maxiter": 200},
         "sequential": sequential,
     }
-    if is_list:
+
+    if hasattr(acq_func, 'ratio_estimator') and acq_func.ratio_estimator is not None:
+        optimizer = optimize_acqf_sgld
+        kwargs['options']['callback'] = acq_func.ratio_estimator.optimize_callback
+    elif is_list:
+        optimizer = optimize_acqf_list
+        sequential = True
         kwargs.pop("q")
         kwargs.pop("sequential")
-        
+    else:
+        optimizer = optimize_acqf
+
     # optimize
     candidates, _ = optimizer(**kwargs)
     

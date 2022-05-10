@@ -131,7 +131,9 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         target_grid = sampler(y_post)
 
         # TODO: check these lines for shaping errors
+        # (*q_batch_shape, grid_size)
         weights = y_post.mvn.log_prob(target_grid.squeeze(-1))
+        # (*q_batch_shape, grid_size, 1, 1)
         weights = weights[..., None, None]
 
         assert target_grid.size(0) == grid_res
@@ -139,13 +141,8 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         weights = torch.movedim(weights, 0, -3)
 
         conf_pred_mask, conditioned_models, q_conf_scores = conformal_gp_regression(
-            model, inputs, target_grid, alpha, temp=temp
+            model, inputs, target_grid, alpha, temp=temp, ratio_estimator=ratio_estimator
         )
-        target_dim = target_grid.shape[-1]
-        if target_dim == 1:
-            # reshape to (*q_batch_shape, grid_res, q_batch_size, target_dim)
-            conf_pred_mask = conf_pred_mask.unsqueeze(-1)  # create target dim
-            q_conf_scores = q_conf_scores.unsqueeze(-1)  # create target dim
 
         num_accepted = (conf_pred_mask >= 0.5).float().sum(-3)
         min_accepted = num_accepted.min()
@@ -247,7 +244,7 @@ def conformal_gp_regression(
     if gp._aug_batch_shape != torch.Size([]):
         # we need to put the batch shape dim first for the posterior call
         train_inputs = train_inputs.movedim(len(q_batch_shape) + 1, 0)
-        train_inputs = train_inputs[0] # damn botorch batch dims
+        train_inputs = train_inputs[0]  # damn botorch batch dims
         
     train_labels = updated_gps.prediction_strategy.train_labels
     train_labels = train_labels.view(*target_grid.shape[:-2], num_total, target_dim)
@@ -263,14 +260,10 @@ def conformal_gp_regression(
     pred_dist = torch.distributions.Normal(posterior.mean, post_var.sqrt())
     
     conf_scores = pred_dist.log_prob(train_labels)
-    if target_dim == 1:
-        conf_scores = conf_scores.view(*q_batch_shape, grid_size, num_total)
-    else:
-        conf_scores = conf_scores.view(*q_batch_shape, grid_size, num_total, target_dim)
-        conf_scores = conf_scores.transpose(-1, -2) # now q x grid x target x n
-        
-    q_conf_scores = conf_scores[..., num_old_train:].detach()
+    conf_scores = conf_scores.view(*q_batch_shape, grid_size, num_total, target_dim)
+    conf_scores = conf_scores.transpose(-1, -2)  # (*q_batch_shape, grid_size, target_dim, num_total)
 
+    # rank by last dim
     original_shape = conf_scores.shape
     ranks_by_score = torchsort.soft_rank(
         conf_scores.flatten(0, -2),
@@ -278,35 +271,42 @@ def conformal_gp_regression(
         regularization_strength=temp,
     ).view(
         *original_shape
-    )  # (num_q_batches, grid_size, num_total)
+    )
+
+    # soft Heaviside
     threshold = ranks_by_score[..., num_old_train:]
-    rank_mask = 1 - torch.sigmoid(
+    rank_mask = 1. - torch.sigmoid(
         (ranks_by_score.unsqueeze(-1) - threshold.unsqueeze(-2)) / temp
-    )  # (num_q_batches, grid_size, num_total, q_batch_size)
+    )  # (*q_batch_shape, grid_size, target_dim, num_total, q_batch_size)
     rank_mask[..., np.arange(-q_batch_size, 0), np.arange(-q_batch_size, 0)] *= 2
 
+    # get importance weights to adjust for covariate shift
+    imp_weights = torch.zeros_like(rank_mask, requires_grad=False)
     if ratio_estimator is None:
-        imp_weights = torch.zeros_like(rank_mask, requires_grad=False)
         imp_weights[..., :num_old_train, :] = 1.0 / (num_old_train + 1)
         imp_weights[
             ..., np.arange(-q_batch_size, 0), np.arange(-q_batch_size, 0)
-        ] = 1.0 / (num_old_train + 1)
+        ] = 1. / (num_old_train + 1)
     else:
-        # adjust weights for covariate shift
         with torch.no_grad():
-            imp_weights = ratio_estimator(train_inputs)  # (*q_batch_shape, num_total)
-        imp_weights /= imp_weights.sum(dim=-1, keepdim=True)
-        imp_weights = imp_weights.view(*q_batch_shape, 1, num_total, 1)
+            dr_old_inputs = ratio_estimator(train_inputs[..., :num_old_train, :])
+            dr_new_inputs = ratio_estimator(train_inputs[..., num_old_train:, :])
+        imp_weights[..., :num_old_train, :] = dr_old_inputs[..., None, :, None]
+        imp_weights[
+            ..., np.arange(-q_batch_size, 0), np.arange(-q_batch_size, 0)
+        ] = dr_new_inputs[..., None, :]
+        imp_weights /= (imp_weights.sum(dim=-2, keepdim=True) + 1e-6)
 
-    # TODO: check this summation index
+    # sum masked importance weights, soft Heaviside again
     cum_weights = (rank_mask * imp_weights).sum(
         -2
-    )  # (*q_batch_shape, grid_size, q_batch_size)
+    )  # (*q_batch_shape, grid_size, target_dim, q_batch_size)
     conf_pred_mask = torch.sigmoid((cum_weights - alpha) / temp)
 
-    if target_dim > 1:
-        conf_pred_mask = conf_pred_mask.transpose(-1, -2)
-        q_conf_scores = q_conf_scores.transpose(-1, -2)
+    # reshape to (*q_batch_shape, grid_size, q_batch_size, target_dim)
+    conf_pred_mask = conf_pred_mask.transpose(-1, -2)
+    conf_scores = conf_scores.transpose(-1, -2)
+    q_conf_scores = conf_scores[..., num_old_train:, :].detach()
 
     return conf_pred_mask, updated_gps, q_conf_scores
 
