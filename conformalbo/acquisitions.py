@@ -23,7 +23,7 @@ from botorch.utils.transforms import (
 )
 
 
-from helpers import (
+from conformalbo.helpers import (
     construct_conformal_bands,
 )
 

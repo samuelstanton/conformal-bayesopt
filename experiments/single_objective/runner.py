@@ -24,6 +24,7 @@ from acquisitions import (
     qConformalUpperConfidenceBound,
     qConformalKnowledgeGradient,
 )
+from ratio_estimation import RatioEstimator
 from utils import (
     generate_initial_data,
     initialize_model,
@@ -139,12 +140,12 @@ def main(
             test_targets = trans(test_targets)[0]
 
             alpha = max(1.0 / math.sqrt(num_train), min_alpha)
-            rx_estimator = None
+
             conformal_kwargs = dict(
                 alpha=alpha,
                 grid_res=tgt_grid_res,
                 max_grid_refinements=max_grid_refinements,
-                ratio_estimator=rx_estimator
+                ratio_estimator=None
             )
             
             torch.cuda.empty_cache()
@@ -180,9 +181,17 @@ def main(
                 model=model,
                 sampler=sampler,
             )
+
+            # prepare density ratio estimator
+            rx_estimator = RatioEstimator(all_inputs.size(-1), device, dtype)
+            rx_estimator.dataset._update_splits(
+                DataSplit(all_inputs.cpu(), torch.zeros(all_inputs.size(0), 1))
+            )
+
             conformal_kwargs['alpha'] = max(1.0 / math.sqrt(all_inputs.size(0)), min_alpha)
             conformal_kwargs['temp'] = temp
             conformal_kwargs['max_grid_refinements'] = 0
+            conformal_kwargs['ratio_estimator'] = rx_estimator
 
             if k == "ei":
                 acqf = qExpectedImprovement(
