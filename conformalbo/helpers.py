@@ -325,7 +325,7 @@ def assess_coverage(
         std_coverage: float
         conformal_coverage: float
     """
-    print("at beginning of cov.: ", torch.cuda.memory_allocated() / 1024**3)
+    # print("at beginning of cov.: ", torch.cuda.memory_allocated() / 1024**3)
     model.eval()
     with torch.no_grad():
         y_post = model.posterior(inputs, observation_noise=True)
@@ -360,7 +360,7 @@ def assess_coverage(
     model.train()
     del target_grid, conf_pred_mask
     torch.cuda.empty_cache()
-    print("at end: ", torch.cuda.memory_allocated() / 1024**3)
+    # print("at end: ", torch.cuda.memory_allocated() / 1024**3)
 
     return std_coverage.item(), conformal_coverage.item()
 

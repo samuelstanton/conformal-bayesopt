@@ -16,7 +16,7 @@ from botorch.optim.initializers import (
 )
 from experiments.std_bayesopt.optim import SGLD
 
-from lambo.utils import DataSplit, update_splits
+from lambo.utils import DataSplit, update_splits, safe_np_cat
 
 
 def optimize_acqf_sgld(
@@ -34,6 +34,7 @@ def optimize_acqf_sgld(
     batch_initial_conditions: Optional[Tensor] = None,
     return_best_only: bool = True,
     sequential: bool = False,
+    warmup_steps: int = 20,
     sgld_steps: int = 100,
     lr: float = 1e-2,
     temperature: float = .1,
@@ -197,49 +198,66 @@ def optimize_acqf_sgld(
     for i, batched_ics_ in enumerate(batched_ics):
         batched_ics_ = batched_ics_.requires_grad_(True)
         sgld = SGLD([batched_ics_], lr=lr, momentum=.9, temperature=temperature)
-        
+
+        iterates = ([], [])
         for _s in range(sgld_steps):
             sgld.zero_grad()
 
             batched_acq_values_ = acq_function(batched_ics_)
+            if _s >= warmup_steps:
+                iterates[0].append(batched_ics_.detach())
+                iterates[1].append(batched_acq_values_.detach())
+                if callable(options.get('callback')):
+                    options.get('callback')(batched_ics_.detach().cpu())
 
-            batched_acq_values_.sum().backward()
-
-            if callable(options.get('callback')):
-                options.get('callback')(batched_acq_values_.detach().cpu())
-            
-            sgld.step()
+            if _s < (sgld_steps - 1):
+                neg_log_density = -batched_acq_values_.sum()
+                neg_log_density.backward()
+                sgld.step()
         
-        with torch.no_grad():
-            batch_candidates_curr, batch_acq_values_curr = batched_ics_.detach(), acq_function(batched_ics_.detach())
+            # with torch.no_grad():
+            #     batch_candidates_curr, batch_acq_values_curr = batched_ics_.detach(), acq_function(batched_ics_.detach())
 
-        # assert not batch_candidates_curr.requires_grad
+            # assert not batch_candidates_curr.requires_grad
 
-        # optimize using random restart optimization
-        # batch_candidates_curr, batch_acq_values_curr = gen_candidates_scipy(
-        #     initial_conditions=batched_ics_,
-        #     acquisition_function=acq_function,
-        #     lower_bounds=bounds[0],
-        #     upper_bounds=bounds[1],
-        #     options={k: v for k, v in options.items() if k not in INIT_OPTION_KEYS},
-        #     inequality_constraints=inequality_constraints,
-        #     equality_constraints=equality_constraints,
-        #     nonlinear_inequality_constraints=nonlinear_inequality_constraints,
-        #     fixed_features=fixed_features,
-        # )
-        batch_candidates_list.append(batch_candidates_curr)
-        batch_acq_values_list.append(batch_acq_values_curr)
+            # optimize using random restart optimization
+            # batch_candidates_curr, batch_acq_values_curr = gen_candidates_scipy(
+            #     initial_conditions=batched_ics_,
+            #     acquisition_function=acq_function,
+            #     lower_bounds=bounds[0],
+            #     upper_bounds=bounds[1],
+            #     options={k: v for k, v in options.items() if k not in INIT_OPTION_KEYS},
+            #     inequality_constraints=inequality_constraints,
+            #     equality_constraints=equality_constraints,
+            #     nonlinear_inequality_constraints=nonlinear_inequality_constraints,
+            #     fixed_features=fixed_features,
+            # )
+
+        batch_candidates_list.append(torch.stack(iterates[0]))
+        batch_acq_values_list.append(torch.stack(iterates[1]))
         logger.info(f"Generated candidate batch {i+1} of {len(batched_ics)}.")
-    batch_candidates = torch.cat(batch_candidates_list)
-    batch_acq_values = torch.cat(batch_acq_values_list)
+    batch_candidates = torch.cat(batch_candidates_list, dim=1)
+    batch_acq_values = torch.cat(batch_acq_values_list, dim=1)
+    # print(batch_candidates.shape)
 
     if post_processing_func is not None:
         batch_candidates = post_processing_func(batch_candidates)
 
     if return_best_only:
-        best = torch.argmax(batch_acq_values.view(-1), dim=0)
-        batch_candidates = batch_candidates[best]
-        batch_acq_values = batch_acq_values[best]
+        flat_cands = batch_candidates.flatten(0, -3)
+        flat_acq_vals = batch_acq_values.flatten()
+
+        # in bounds elementwise?
+        in_bounds = (flat_cands >= bounds[0]).prod(-1) * (flat_cands <= bounds[1]).prod(-1)
+        # in bounds batchwise?
+        in_bounds = in_bounds.prod(-1).bool()
+
+        flat_cands = flat_cands[in_bounds]
+        flat_acq_vals = flat_acq_vals[in_bounds]
+
+        best = torch.argmax(flat_acq_vals, dim=0)
+        batch_candidates = flat_cands[best]
+        batch_acq_values = flat_acq_vals[best]
 
     if isinstance(acq_function, OneShotAcquisitionFunction):
         if not kwargs.get("return_full_tree", False):
@@ -285,13 +303,17 @@ class RatioEstimator(nn.Module):
             return self._prior_ratio
 
         def _update_splits(self, new_split):
-            self.cls_train_split, self.cls_val_split, self.cls_test_split = update_splits(
-                train_split=self.cls_train_split,
-                val_split=self.cls_val_split,
-                test_split=self.cls_test_split,
-                new_split=new_split,
-                holdout_ratio=0.2,
+            self.cls_train_split = DataSplit(
+                safe_np_cat([self.cls_train_split[0], new_split[0]]),
+                safe_np_cat([self.cls_train_split[1], new_split[1]]),
             )
+            # self.cls_train_split, self.cls_val_split, self.cls_test_split = update_splits(
+            #     train_split=self.cls_train_split,
+            #     val_split=self.cls_val_split,
+            #     test_split=self.cls_test_split,
+            #     new_split=new_split,
+            #     holdout_ratio=0.2,
+            # )
             self.recompute_emp_prior()
 
     def __init__(self, in_size=1, device=None):
@@ -329,9 +351,9 @@ class RatioEstimator(nn.Module):
         if isinstance(xk, np.ndarray):
             xk = torch.from_numpy(xk)
         xk = xk.reshape(-1, 1)
-        xk.add_(0.1 * torch.randn_like(xk))
+        # xk.add_(0.1 * torch.randn_like(xk))
 
-        yk = torch.zeros(len(xk), 1)
+        yk = torch.ones(len(xk), 1)
 
         self.dataset._update_splits(DataSplit(xk, yk))
 
@@ -340,7 +362,7 @@ class RatioEstimator(nn.Module):
 
         num_total = len(self.dataset)
         num_positive = self.dataset.num_positive
-        if num_total > 0 and self.dataset.num_positive < num_total:
+        if num_positive > 0:
             loss_fn = torch.nn.BCEWithLogitsLoss(
                 pos_weight=torch.tensor(
                     [(num_total - num_positive) / num_positive], device=self.device
