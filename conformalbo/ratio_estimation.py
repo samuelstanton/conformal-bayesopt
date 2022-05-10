@@ -13,7 +13,7 @@ from botorch.optim.initializers import (
     gen_batch_initial_conditions,
     gen_one_shot_kg_initial_conditions,
 )
-from conformalbo.optim import SGLD
+from optim import SGLD
 
 from lambo.utils import DataSplit, update_splits, safe_np_cat
 
@@ -258,6 +258,78 @@ def optimize_acqf_sgld(
             batch_candidates = acq_function.extract_candidates(X_full=batch_candidates)
 
     return batch_candidates, batch_acq_values
+
+
+def optimize_acqf_sgld_list(
+    acq_function_list: List[AcquisitionFunction],
+    bounds: Tensor,
+    num_restarts: int,
+    raw_samples: Optional[int] = None,
+    options: Optional[Dict[str, Union[bool, float, int, str]]] = None,
+    inequality_constraints: Optional[List[Tuple[Tensor, Tensor, float]]] = None,
+    equality_constraints: Optional[List[Tuple[Tensor, Tensor, float]]] = None,
+    fixed_features: Optional[Dict[int, float]] = None,
+    post_processing_func: Optional[Callable[[Tensor], Tensor]] = None,
+) -> Tuple[Tensor, Tensor]:
+    r"""Generate a list of candidates from a list of acquisition functions.
+    The acquisition functions are optimized in sequence, with previous candidates
+    set as `X_pending`. This is also known as sequential greedy optimization.
+    Args:
+        acq_function_list: A list of acquisition functions.
+        bounds: A `2 x d` tensor of lower and upper bounds for each column of `X`.
+        num_restarts:  Number of starting points for multistart acquisition
+            function optimization.
+        raw_samples: Number of samples for initialization. This is required
+            if `batch_initial_conditions` is not specified.
+        options: Options for candidate generation.
+        inequality constraints: A list of tuples (indices, coefficients, rhs),
+            with each tuple encoding an inequality constraint of the form
+            `\sum_i (X[indices[i]] * coefficients[i]) >= rhs`
+        equality constraints: A list of tuples (indices, coefficients, rhs),
+            with each tuple encoding an inequality constraint of the form
+            `\sum_i (X[indices[i]] * coefficients[i]) = rhs`
+        fixed_features: A map `{feature_index: value}` for features that
+            should be fixed to a particular value during generation.
+        post_processing_func: A function that post-processes an optimization
+            result appropriately (i.e., according to `round-trip`
+            transformations).
+    Returns:
+        A two-element tuple containing
+        - a `q x d`-dim tensor of generated candidates.
+        - a `q`-dim tensor of expected acquisition values, where the value at
+            index `i` is the acquisition value conditional on having observed
+            all candidates except candidate `i`.
+    """
+    if not acq_function_list:
+        raise ValueError("acq_function_list must be non-empty.")
+    candidate_list, acq_value_list = [], []
+    candidates = torch.tensor([], device=bounds.device, dtype=bounds.dtype)
+    base_X_pending = acq_function_list[0].X_pending
+    for acq_function in acq_function_list:
+        if candidate_list:
+            acq_function.set_X_pending(
+                torch.cat([base_X_pending, candidates], dim=-2)
+                if base_X_pending is not None
+                else candidates
+            )
+        candidate, acq_value = optimize_acqf_sgld(
+            acq_function=acq_function,
+            bounds=bounds,
+            q=1,
+            num_restarts=num_restarts,
+            raw_samples=raw_samples,
+            options=options or {},
+            inequality_constraints=inequality_constraints,
+            equality_constraints=equality_constraints,
+            fixed_features=fixed_features,
+            post_processing_func=post_processing_func,
+            return_best_only=True,
+            sequential=False,
+        )
+        candidate_list.append(candidate)
+        acq_value_list.append(acq_value)
+        candidates = torch.cat(candidate_list, dim=-2)
+    return candidates, torch.stack(acq_value_list)
 
 
 class RatioEstimator(nn.Module):

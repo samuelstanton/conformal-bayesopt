@@ -16,7 +16,7 @@ from botorch.test_functions.multi_objective import (
 )
 from botorch.optim.optimize import optimize_acqf, optimize_acqf_list
 
-from ratio_estimation import optimize_acqf_sgld
+from ratio_estimation import optimize_acqf_sgld, optimize_acqf_sgld_list
 
 
 def parse():
@@ -193,7 +193,10 @@ def optimize_acqf_and_get_observation(
         optimizer = optimize_acqf_sgld
         kwargs['options']['callback'] = acq_func.ratio_estimator.optimize_callback
     elif is_list:
-        optimizer = optimize_acqf_list
+        if hasattr(acq_func, 'ratio_estimator') and acq_func.ratio_estimator is not None:
+            optimizer = optimize_acqf_sgld_list
+        else:
+            optimizer = optimize_acqf_list
         sequential = True
         kwargs.pop("q")
         kwargs.pop("sequential")
