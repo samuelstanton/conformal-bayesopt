@@ -55,6 +55,9 @@ def main(
     problem: str = None,
     min_alpha: float = 0.05,
     max_grid_refinements: int = 4,
+    sgld_steps: int = 100,
+    sgld_temperature: float = 1e-3,
+    sgld_lr: int = 1e-3,
 ):
     dtype = torch.double if dtype == "double" else torch.float
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -145,9 +148,14 @@ def main(
                 alpha=alpha,
                 grid_res=tgt_grid_res,
                 max_grid_refinements=max_grid_refinements,
-                ratio_estimator=None
+                ratio_estimator=None,
             )
-            
+            conformal_opt_kwargs = dict(
+                temperature=sgld_temperature,
+                lr=sgld_lr,
+                sgld_steps=sgld_steps,
+            )
+
             torch.cuda.empty_cache()
 
             # now assess coverage on the heldout set
@@ -248,6 +256,9 @@ def main(
                 )
 
             # optimize acquisition
+            if k[0] == "c":
+                optimize_acqf_kwargs = {**optimize_acqf_kwargs, **conformal_opt_kwargs}
+
             new_x, observed_obj, exact_obj = optimize_acqf_and_get_observation(
                 acqf, **optimize_acqf_kwargs
             )

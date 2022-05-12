@@ -104,6 +104,8 @@ def optimize_acqf_sgld(
         >>>     qEI, bounds, 3, 15, 256, sequential=True
         >>> )
     """
+    print(sgld_steps, temperature, lr)
+
     if sequential and q > 1:
         if not return_best_only:
             raise NotImplementedError(

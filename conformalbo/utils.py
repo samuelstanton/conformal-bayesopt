@@ -34,6 +34,9 @@ def parse():
     parser.add_argument("--tgt_grid_res", type=int, default=64)
     parser.add_argument("--temp", type=float, default=1e-2)
     parser.add_argument("--max_grid_refinements", type=int, default=4)
+    parser.add_argument("--sgld_steps", type=int, default=100)
+    parser.add_argument("--sgld_temperature", type=float, default=1e-3)
+    parser.add_argument("--sgld_lr", type=float, default=1e-3)
     return parser.parse_args()
 
 
@@ -176,9 +179,11 @@ def optimize_acqf_and_get_observation(
     RAW_SAMPLES=128,
     is_poisson=False,
     sequential=False,
+    **kwargs,
 ):
     """Optimizes the acquisition function, and returns a new candidate and a noisy observation."""
 
+    _kwargs = kwargs # og kwargs
     kwargs = {
         "acq_function_list" if is_list else "acq_function": acq_func,
         "bounds": bounds,
@@ -192,9 +197,12 @@ def optimize_acqf_and_get_observation(
     if hasattr(acq_func, 'ratio_estimator') and acq_func.ratio_estimator is not None:
         optimizer = optimize_acqf_sgld
         kwargs['options']['callback'] = acq_func.ratio_estimator.optimize_callback
+        kwargs = {**kwargs, **_kwargs}
+
     elif is_list:
         if hasattr(acq_func, 'ratio_estimator') and acq_func.ratio_estimator is not None:
             optimizer = optimize_acqf_sgld_list
+            kwargs = {**kwargs, **_kwargs}
         else:
             optimizer = optimize_acqf_list
         sequential = True
