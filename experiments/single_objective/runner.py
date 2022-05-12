@@ -72,7 +72,7 @@ def main(
 
     keys = ["cucb", "cei", "cnei", "ucb", "ei", "nei", "rnd"]
     # keys = ["ckg", "cucb", "kg", "ucb", "rnd"]
-    best_observed = {k: [] for k in keys}
+    best_actual = {k: [] for k in keys}
     coverage = {k: [] for k in keys}
 
     # initialize noise se
@@ -87,7 +87,7 @@ def main(
 
     data_dict = {}
     for k in keys:
-        best_observed[k].append(best_actual_obj)
+        best_actual[k].append(best_actual_obj)
         data_dict[k] = (all_inputs, all_targets)
 
     optimize_acqf_kwargs = {
@@ -108,8 +108,8 @@ def main(
 
             if k == "rnd":
                 # update random
-                best_observed[k] = update_random_observations(
-                    batch_size, best_observed[k], bb_fn.bounds, bb_fn, dim=bounds.shape[1],
+                best_actual[k] = update_random_observations(
+                    batch_size, best_actual[k], bb_fn.bounds, bb_fn, dim=bounds.shape[1],
                     noise_se=problem_noise_se,
                 )
                 continue
@@ -256,8 +256,8 @@ def main(
             del model
             torch.cuda.empty_cache()
         
-            best_observed[k].append(
-                max(best_observed[k][-1], exact_obj.max().item())
+            best_actual[k].append(
+                max(best_actual[k][-1], exact_obj.max().item())
             )
 
             # update dataset
@@ -267,13 +267,13 @@ def main(
 
         t1 = time.time()
 
-        best = {key: val[-1] for key, val in best_observed.items()}
+        best = {key: val[-1] for key, val in best_actual.items()}
         if verbose:
             print(f"\nBatch: {iteration:>2}, time: {t1-t0:>4.2f}, alpha: {alpha:0.4f}, best values:")
             [print(f"{key}: {val:0.4f}") for key, val in best.items()]
 
     output_dict = {
-        "best_achieved": best_observed,
+        "best_achieved": best_actual,
         "coverage": coverage,
         "inputs": {k: data_dict[k][0] for k in keys},
     }
