@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import math
+import copy
 
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -38,8 +39,8 @@ def optimize_acqf_sgld(
     batch_initial_conditions: Optional[Tensor] = None,
     return_best_only: bool = True,
     sequential: bool = False,
-    warmup_steps: int = 20,
-    sgld_steps: int = 100,
+    warmup_steps: int = 32,
+    sgld_steps: int = 256,
     lr: float = 1e-3,
     temperature: float = 1e-1,
     **kwargs: Any,
@@ -393,7 +394,7 @@ class RatioEstimator(nn.Module):
             # )
             self.recompute_emp_prior()
 
-    def __init__(self, in_size=1, device=None, dtype=None):
+    def __init__(self, in_size=1, device=None, dtype=None, ema_weight=1e-2):
         super().__init__()
 
         self.device = device
@@ -401,7 +402,9 @@ class RatioEstimator(nn.Module):
         self.in_size = in_size
         self.dataset = RatioEstimator._Dataset()
 
-        ## Remains uniform, when untrained.
+        # self.classifier = nn.Sequential(
+        #     nn.Linear(in_size, 1),
+        # )
         self.classifier = nn.Sequential(
             nn.Linear(in_size, 64),
             nn.ReLU(),
@@ -409,21 +412,20 @@ class RatioEstimator(nn.Module):
             nn.ReLU(),
             nn.Linear(64, 1),
         ).to(device=device, dtype=dtype)
-        # self.classifier = nn.Sequential(
-        #     nn.Linear(in_size, 1),
-        # )
-        # for p in self.classifier.parameters():
-        #     p.data.fill_(0)
-        #     p.requires_grad_(True)
+
+        ## density ratio estimates are exactly 1 when untrained
+        self._target_network = copy.deepcopy(self.classifier)
+        self._target_network.requires_grad_(False)
+        for tgt_p in self._target_network.parameters():
+            tgt_p.data.fill_(0.)
+        self._ema_weight = ema_weight
 
         self.criterion = torch.nn.BCEWithLogitsLoss()
-        self.optim = torch.optim.Adam(
-            self.classifier.parameters(), lr=1e-2, betas=(0.0, 1e-2)
-        )
+        self.optim = torch.optim.Adam(self.classifier.parameters(), lr=1e-3)
 
     @torch.no_grad()
     def forward(self, inputs):
-        _p = self.classifier(inputs).squeeze(-1).sigmoid()
+        _p = self._target_network(inputs).squeeze(-1).sigmoid()
         # return self.dataset.emp_prior * _p / (1 - _p + 1e-8)
         return _p.clamp_max(1 - 1e-6) / (1 - _p).clamp_min(1e-6)
 
@@ -452,7 +454,7 @@ class RatioEstimator(nn.Module):
                 self.dataset, shuffle=True, batch_size=num_total
             )
 
-            for _ in range(2):
+            for _ in range(1):
                 X, y = next(iter(loader))
                 X = X.to(device=self.device, dtype=self.dtype)
                 y = y.to(device=self.device, dtype=self.dtype)
@@ -460,6 +462,13 @@ class RatioEstimator(nn.Module):
                 loss = loss_fn(self.classifier(X), y)
                 loss.backward()
                 self.optim.step()
+
+                with torch.no_grad():
+                    for src_p, tgt_p in zip(
+                            self.classifier.parameters(), self._target_network.parameters()
+                    ):
+                        tgt_p.mul_(1. - self._ema_weight)
+                        tgt_p.add_(self._ema_weight * src_p)
 
         self.classifier.eval()
         self.classifier.requires_grad_(False)
