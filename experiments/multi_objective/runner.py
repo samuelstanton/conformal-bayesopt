@@ -57,6 +57,9 @@ def main(
     problem: str = "branincurrin",
     min_alpha: float = 0.05,
     max_grid_refinements: int = 4,
+    sgld_steps: int = 100,
+    sgld_temperature: float = 1e-3,
+    sgld_lr: float = 1e-3,
 ):
     dtype = torch.double if dtype == "double" else torch.float
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -162,6 +165,12 @@ def main(
             )
             
             torch.cuda.empty_cache()
+
+            conformal_opt_kwargs = dict(
+                temperature=sgld_temperature,
+                lr=sgld_lr,
+                sgld_steps=sgld_steps,
+            )
 
             # now assess coverage on the heldout set
             conformal_kwargs['temp'] = 1e-6  # set temp to low value when evaluating coverage
@@ -271,6 +280,8 @@ def main(
                         **base_kwargs,
                     )
                     acq_func_list.append(acq_func)
+                acqf = acq_func_list # keep names consistent
+
             elif k == "cnparego":
                 # here we need an acqf list b/c the chebyshev scalarization changes
                 # for each value
@@ -290,19 +301,17 @@ def main(
                         **conformal_kwargs,
                     )
                     acq_func_list.append(acq_func)
+                acqf = acq_func_list # keep names consistent
 
             # optimize acquisition
-            if "parego" in k:
-                # TODO: optimize list function
-                opt_result = optimize_acqf_and_get_observation(
-                    acq_func_list, is_list=True, **optimize_acqf_kwargs,
-                )
-                del acq_func_list
-            else:
-                opt_result = optimize_acqf_and_get_observation(
-                    acqf, **optimize_acqf_kwargs
-                )
-                del acqf
+            if k[0] == "c":
+                optimize_acqf_kwargs = {**optimize_acqf_kwargs, **conformal_opt_kwargs}
+            
+            is_list = "parego" in k
+            opt_result = optimize_acqf_and_get_observation(
+                acqf, is_list=is_list, **optimize_acqf_kwargs,
+            )
+            del acqf # for some model cleanup
 
             new_x, new_y, new_f, new_a, all_x, all_y = opt_result
             # evaluate coverage on query candidates
