@@ -1,8 +1,11 @@
-from torch import nn
 import numpy as np
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import torch
-from torch import Tensor
+import math
+
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
+from torch import Tensor, nn
+
 from botorch.acquisition.acquisition import (
     AcquisitionFunction,
     OneShotAcquisitionFunction,
@@ -13,8 +16,10 @@ from botorch.optim.initializers import (
     gen_batch_initial_conditions,
     gen_one_shot_kg_initial_conditions,
 )
-from optim import SGLD
-
+try:
+    from optim import SGLD
+except ImportError:
+    from conformalbo.optim import SGLD
 from lambo.utils import DataSplit, update_splits, safe_np_cat
 
 
@@ -36,7 +41,7 @@ def optimize_acqf_sgld(
     warmup_steps: int = 20,
     sgld_steps: int = 100,
     lr: float = 1e-3,
-    temperature: float = 1e-2,
+    temperature: float = 1e-1,
     **kwargs: Any,
 ) -> Tuple[Tensor, Tensor]:
     r"""Generate a set of candidates via multi-start optimization.
@@ -195,10 +200,12 @@ def optimize_acqf_sgld(
     )
     batched_ics = batch_initial_conditions.detach().clone().split(batch_limit)
 
-    # collect SGLD iterates, bootstrap ratio estimator
+    # rescale temp so noise has consistent norm
+    scaled_temp = temperature / math.sqrt(bounds.size(-1))
     sgld_optimizers = [
-        SGLD([ic_batch], lr=lr, momentum=.1, temperature=temperature) for ic_batch in batched_ics
+        SGLD([ic_batch], lr=lr, momentum=.1, temperature=scaled_temp) for ic_batch in batched_ics
     ]
+    # collect SGLD iterates, bootstrap ratio estimator
     sgld_iterates = [
         [] for _ in batched_ics
     ]
@@ -314,13 +321,17 @@ def optimize_acqf_sgld_list(
                 if base_X_pending is not None
                 else candidates
             )
+        options = {} if options is None else options
+        if hasattr(acq_function.ratio_estimator, 'optimize_callback'):
+            options['callback'] = acq_function.ratio_estimator.optimize_callback
+
         candidate, acq_value = optimize_acqf_sgld(
             acq_function=acq_function,
             bounds=bounds,
             q=1,
             num_restarts=num_restarts,
             raw_samples=raw_samples,
-            options=options or {},
+            options=options,
             inequality_constraints=inequality_constraints,
             equality_constraints=equality_constraints,
             fixed_features=fixed_features,
@@ -367,7 +378,7 @@ class RatioEstimator(nn.Module):
             n = len(self)
             n_p = self.num_positive
             if n_p > 0 and n - n_p > 0:
-                self._prior_ratio = n / n_p - 1.0
+                self._prior_ratio = (n - n_p) / n_p
             return self._prior_ratio
 
         def _update_splits(self, new_split):
@@ -415,7 +426,8 @@ class RatioEstimator(nn.Module):
     @torch.no_grad()
     def forward(self, inputs):
         _p = self.classifier(inputs).squeeze(-1).sigmoid()
-        return self.dataset.emp_prior * _p / (1 - _p + 1e-6)
+        # return self.dataset.emp_prior * _p / (1 - _p + 1e-8)
+        return _p.clamp_max(1 - 1e-6) / (1 - _p).clamp_min(1e-6)
 
     def optimize_callback(self, xk):
         if isinstance(xk, np.ndarray):
@@ -435,7 +447,7 @@ class RatioEstimator(nn.Module):
         if num_positive > 0:
             loss_fn = torch.nn.BCEWithLogitsLoss(
                 pos_weight=torch.tensor(
-                    [(num_total - num_positive) / num_positive], device=self.device
+                    (self.dataset.emp_prior,), device=self.device
                 )
             )
             loader = torch.utils.data.DataLoader(

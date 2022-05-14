@@ -289,13 +289,13 @@ def conformal_gp_regression(
         ] = 1. / (num_old_train + 1)
     else:
         with torch.no_grad():
-            dr_old_inputs = ratio_estimator(train_inputs[..., :num_old_train, :])
-            dr_new_inputs = ratio_estimator(train_inputs[..., num_old_train:, :])
+            dr_old_inputs = ratio_estimator(train_inputs[..., :num_old_train, :]).clamp_min(1e-6)
+            dr_new_inputs = ratio_estimator(train_inputs[..., num_old_train:, :]).clamp_min(1e-6)
         imp_weights[..., :num_old_train, :] = dr_old_inputs[..., None, :, None]
         imp_weights[
             ..., np.arange(-q_batch_size, 0), np.arange(-q_batch_size, 0)
         ] = dr_new_inputs[..., None, :]
-        imp_weights /= (imp_weights.sum(dim=-2, keepdim=True) + 1e-6)
+        imp_weights /= imp_weights.sum(dim=-2, keepdim=True)
 
     # sum masked importance weights, soft Heaviside again
     cum_weights = (rank_mask * imp_weights).sum(

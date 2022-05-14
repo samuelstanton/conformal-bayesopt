@@ -114,10 +114,10 @@ def update_random_observations(
     drawing a new random point, observing its value, and updating the list.
     """
     rand_x = torch.rand(BATCH_SIZE, dim).to(bounds) * (bounds[1] - bounds[0]) + bounds[0]
-    # This eval needs to be noisy
     rand_y = problem(rand_x)
-    rand_y += noise_se * torch.randn_like(rand_y)
+    # return true fn value
     next_random_best = rand_y.max().item()
+    # rand_y += noise_se * torch.randn_like(rand_y)
     best_random.append(max(best_random[-1], next_random_best))
     return best_random
 
@@ -198,13 +198,14 @@ def optimize_acqf_and_get_observation(
         optimizer = optimize_acqf_sgld
         kwargs['options']['callback'] = acq_func.ratio_estimator.optimize_callback
         kwargs = {**kwargs, **_kwargs}
-
+    elif is_list and hasattr(acq_func[0], 'ratio_estimator') and acq_func[0].ratio_estimator is not None:
+        optimizer = optimize_acqf_sgld_list
+        kwargs = {**kwargs, **_kwargs}
+        sequential = True
+        kwargs.pop("q")
+        kwargs.pop("sequential")
     elif is_list:
-        if hasattr(acq_func, 'ratio_estimator') and acq_func.ratio_estimator is not None:
-            optimizer = optimize_acqf_sgld_list
-            kwargs = {**kwargs, **_kwargs}
-        else:
-            optimizer = optimize_acqf_list
+        optimizer = optimize_acqf_list
         sequential = True
         kwargs.pop("q")
         kwargs.pop("sequential")
