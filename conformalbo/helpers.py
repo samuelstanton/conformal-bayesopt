@@ -94,7 +94,7 @@ def conf_mask_to_bounds(target_grid, conf_pred_mask):
 
 
 def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_refinements, sampler,
-                              ratio_estimator=None):
+                              ratio_estimator=None, mask_ood=True):
     """
     Construct dense pointwise target grid and conformal prediction mask
     Args:
@@ -141,7 +141,8 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         weights = torch.movedim(weights, 0, -3)
 
         conf_pred_mask, conditioned_models, q_conf_scores = conformal_gp_regression(
-            model, inputs, target_grid, alpha, temp=temp, ratio_estimator=ratio_estimator
+            model, inputs, target_grid, alpha, temp=temp, ratio_estimator=ratio_estimator,
+            mask_ood=mask_ood
         )
 
         num_accepted = (conf_pred_mask >= 0.5).float().sum(-3)
@@ -202,14 +203,15 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     min_accepted = int(min_accepted)
     max_accepted = int(num_accepted.max())
     msg = f"\ntarget_grid: {target_grid.shape}, {min_accepted} - {max_accepted} grid points accepted"
-    if torch.any(num_accepted < 2):
-            warnings.warn(msg)
+    # if torch.any(num_accepted < 2):
+    #         warnings.warn(msg)
 
     return target_grid, weights, conf_pred_mask, conditioned_models
 
 
 def conformal_gp_regression(
-    gp, test_inputs, target_grid, alpha=0.2, temp=1e-6, ratio_estimator=None, **kwargs
+    gp, test_inputs, target_grid, alpha=0.2, temp=1e-6, ratio_estimator=None, mask_ood=True,
+    **kwargs
 ):
     """
     Full conformal Bayes for exact GP regression.
@@ -303,6 +305,11 @@ def conformal_gp_regression(
     )  # (*q_batch_shape, grid_size, target_dim, q_batch_size)
     conf_pred_mask = torch.sigmoid((cum_weights - alpha) / temp)
 
+    # (acquisition only) apply soft mask to OOD inputs where any target value is accepted
+    if mask_ood:
+        ood_mask = torch.sigmoid((imp_weights[..., num_old_train:, :].sum(-2) - alpha) / temp)
+        conf_pred_mask = (1. - ood_mask) * conf_pred_mask
+
     # reshape to (*q_batch_shape, grid_size, q_batch_size, target_dim)
     conf_pred_mask = conf_pred_mask.transpose(-1, -2)
     conf_scores = conf_scores.transpose(-1, -2)
@@ -342,7 +349,7 @@ def assess_coverage(
         grid_sampler = IIDNormalSampler(grid_res, resample=False, collapse_batch_dims=False)
         target_grid, _, conf_pred_mask, _ = construct_conformal_bands(
             model, inputs[:, None], alpha, temp, grid_res,
-            max_grid_refinements, grid_sampler, ratio_estimator
+            max_grid_refinements, grid_sampler, ratio_estimator, mask_ood=False
         )
         try:
             conf_lb, conf_ub = conf_mask_to_bounds(target_grid, conf_pred_mask)

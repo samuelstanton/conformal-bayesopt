@@ -72,9 +72,11 @@ def main(
     bounds[1] += 1.
     print(f"function: {problem}, x bounds: {bounds}")
 
-    keys = ["cehvi", "cnehvi", "ehvi", "nehvi", "nparego", "cnparego", "rnd"]
+    # keys = ["cehvi", "cnehvi", "ehvi", "nehvi", "nparego", "cnparego", "rnd"]
+    keys = ["cehvi", "cnehvi", "ehvi", "nehvi", "rnd"]
     hv_dict = {k: [] for k in keys}
-    coverage = {k: [] for k in keys}
+    iid_coverage = {k: [] for k in keys}
+    query_coverage = {k: [] for k in keys}
 
     # initialize noise se
     # due to our scaling, we want to distinguish b/w the noise added into the function
@@ -163,13 +165,13 @@ def main(
 
             # now assess coverage on the heldout set
             conformal_kwargs['temp'] = 1e-6  # set temp to low value when evaluating coverage
-            coverage[k].append(
+            iid_coverage[k].append(
                 assess_coverage(model, test_inputs, test_targets, **conformal_kwargs)
             )
-            last_cvrg = coverage[k][-1]
+            last_cvrg = iid_coverage[k][-1]
             print(
-                f"{k}: cred. coverage {last_cvrg[0]:0.4f}, conf. coverage {last_cvrg[1]:0.4f}, "
-                f"target coverage: {1 - alpha:0.4f}"
+                f"IID coverage ({k}): credible {last_cvrg[0]:0.4f}, conformal {last_cvrg[1]:0.4f}, "
+                f"target level: {1 - alpha:0.4f}"
             )
             model.train()
             torch.cuda.empty_cache()
@@ -292,21 +294,43 @@ def main(
             # optimize acquisition
             if "parego" in k:
                 # TODO: optimize list function
-                new_x, observed_obj, exact_obj = optimize_acqf_and_get_observation(
+                opt_result = optimize_acqf_and_get_observation(
                     acq_func_list, is_list=True, **optimize_acqf_kwargs,
                 )
+                del acq_func_list
             else:
-                new_x, observed_obj, exact_obj = optimize_acqf_and_get_observation(
+                opt_result = optimize_acqf_and_get_observation(
                     acqf, **optimize_acqf_kwargs
                 )
                 del acqf
+
+            new_x, new_y, new_f, new_a, all_x, all_y = opt_result
+            # evaluate coverage on query candidates
+            sample_idxs = np.random.permutation(all_x.shape[0])[:math.ceil(num_test / batch_size)]
+            test_inputs = torch.cat(
+                [new_x, all_x[sample_idxs].flatten(0, -2)]
+            )
+            test_targets = trans(torch.cat(
+                [new_y, all_y[sample_idxs].flatten(0, -2)]
+            ))[0]
+            conformal_kwargs['temp'] = 1e-6  # set temp to low value when evaluating coverage
+            conformal_kwargs['max_grid_refinements'] = max_grid_refinements
+            query_coverage[k].append(
+                assess_coverage(model, test_inputs, test_targets, **conformal_kwargs)
+            )
+            last_cvrg = query_coverage[k][-1]
+            print(
+                f"query coverage ({k}): credible {last_cvrg[0]:0.4f}, conformal {last_cvrg[1]:0.4f}, "
+                f"target level: {1 - alpha:0.4f}"
+            )
+
             model.train()
             del model
             torch.cuda.empty_cache()
         
             # update dataset
             all_inputs = torch.cat([all_inputs, new_x])
-            all_targets = torch.cat([all_targets, observed_obj])
+            all_targets = torch.cat([all_targets, new_y])
             data_dict[k] = (all_inputs, all_targets)
 
             # update hypervolumes
@@ -323,7 +347,8 @@ def main(
 
     output_dict = {
         "best_achieved": hv_dict,
-        "coverage": coverage,
+        "coverage": iid_coverage,
+        "query_coverage": query_coverage,
         "inputs": {k: data_dict[k][0] for k in keys},
     }
     return output_dict
