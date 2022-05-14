@@ -204,6 +204,12 @@ def optimize_acqf_sgld(
     sgld_optimizers = [
         SGLD([ic_batch], lr=lr, momentum=.1, temperature=scaled_temp) for ic_batch in batched_ics
     ]
+    # cyclic learning rate so we actually find the peaks of the modes
+    sgld_lr_scheds = [
+        torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max=sgld_steps // 4, eta_min=lr / 16.
+        ) for opt in sgld_optimizers
+    ]
     # collect SGLD iterates, bootstrap ratio estimator
     sgld_iterates = [
         [] for _ in batched_ics
@@ -233,6 +239,7 @@ def optimize_acqf_sgld(
                 loss = neg_log_density + 1e2 * (lb_violation + ub_violation)
                 loss.backward()
                 batch_optimizer.step()
+                sgld_lr_scheds[batch_idx].step()
 
             # dr_estimates[1] = acq_function.ratio_estimator(batch_initial_conditions)
             # dr_est_diff = torch.norm(dr_estimates[0] - dr_estimates[1]) / torch.norm(dr_estimates[1] + 1e-6)
