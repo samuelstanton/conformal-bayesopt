@@ -41,16 +41,14 @@ def parse():
     return parser.parse_args()
 
 
-def sample_random_orthant(base_samples, bounds):
-    rand_mask = (torch.rand(bounds.size(-1)) < 0.5).to(bounds)
+def sample_random_orthant(base_samples):
+    rand_mask = (torch.rand(base_samples.size(-1)) < 0.5).to(base_samples)
     base_samples = 0.5 * rand_mask + 0.5 * base_samples
-    cube_scale = (bounds[1] - bounds[0]) / 2.
-    cube_loc = bounds[0] + rand_mask * cube_scale
-    return base_samples, cube_loc, cube_scale
+    return base_samples
 
 
 def generate_initial_data(n, fn, NOISE_SE, device, dtype, is_poisson=False, use_sobol_eng=True,
-                          rand_orthant=True):
+                          rand_orthant=False):
     """
     Generate random training data
     """
@@ -68,20 +66,23 @@ def generate_initial_data(n, fn, NOISE_SE, device, dtype, is_poisson=False, use_
             n, fn.dim, device=device, dtype=dtype
         )
 
-    bounds = fn.bounds.to(base_samples)
-
     if rand_orthant:
-        train_x, cube_loc, cube_scale = sample_random_orthant(base_samples, bounds)
+        train_x = sample_random_orthant(base_samples)
     else:
         train_x = base_samples
-        cube_loc = bounds[0]
-        cube_scale = (bounds[1] - bounds[0])
 
+    # transform inputs before passing to fn
+    bounds = fn.bounds.to(base_samples)
+    cube_loc = bounds[0]
+    cube_scale = (bounds[1] - bounds[0])
     exact_obj = fn(train_x * cube_scale + cube_loc)
     if exact_obj.ndim == 1:
         exact_obj = exact_obj.unsqueeze(-1)  # add output dimension if we need to
-    train_obj = exact_obj + NOISE_SE * torch.randn_like(exact_obj)
     best_observed_value = exact_obj.max().item()
+
+    # add noise to observed labels
+    train_obj = exact_obj + NOISE_SE * torch.randn_like(exact_obj)
+
     return train_x, train_obj, best_observed_value
 
 

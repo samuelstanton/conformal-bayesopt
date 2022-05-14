@@ -236,7 +236,7 @@ def _conformal_integration(values, conf_pred_mask, grid_logp, alpha, opt_mask):
         # importance weights
         conf_weights = 1. / grid_logp.exp().clamp_min(1e-6)
         num_accepted = conf_pred_mask.sum(-3, keepdim=True)
-        conf_weights /= num_accepted.clamp_min(1.)
+        conf_weights = conf_weights / num_accepted.clamp_min(1.)
         # count number of optimistic outcomes in conformal set
         scaling_factor = (opt_mask * conf_weights).sum(dim=-3, keepdim=True)
         # normalize importance weights
