@@ -355,7 +355,7 @@ def optimize_acqf_sgld_list(
             equality_constraints=equality_constraints,
             fixed_features=fixed_features,
             post_processing_func=post_processing_func,
-            return_best_only=return_best_only,
+            return_best_only=True,
             sequential=False,
         )
         candidate_list.append(candidate)

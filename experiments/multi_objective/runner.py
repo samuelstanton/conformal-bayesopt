@@ -72,7 +72,8 @@ def main(
     bounds[1] += 1.
     print(f"function: {problem}, x bounds: {bounds}")
 
-    keys = ["cehvi", "cnehvi", "ehvi", "nehvi", "nparego", "cnparego", "rnd"]
+    # keys = ["cehvi", "cnehvi", "ehvi", "nehvi", "nparego", "cnparego", "rnd"]
+    keys = ["cehvi", "cnehvi", "ehvi", "nehvi", "rnd"]
     hv_dict = {k: [] for k in keys}
     iid_coverage = {k: [] for k in keys}
     query_coverage = {k: [] for k in keys}
@@ -169,8 +170,8 @@ def main(
             )
             last_cvrg = iid_coverage[k][-1]
             print(
-                f"{k}: cred. coverage {last_cvrg[0]:0.4f}, conf. coverage {last_cvrg[1]:0.4f}, "
-                f"target coverage: {1 - alpha:0.4f}"
+                f"IID coverage ({k}): credible {last_cvrg[0]:0.4f}, conformal {last_cvrg[1]:0.4f}, "
+                f"target level: {1 - alpha:0.4f}"
             )
             model.train()
             torch.cuda.empty_cache()
@@ -347,6 +348,7 @@ def main(
     output_dict = {
         "best_achieved": hv_dict,
         "coverage": iid_coverage,
+        "query_coverage": query_coverage,
         "inputs": {k: data_dict[k][0] for k in keys},
     }
     return output_dict

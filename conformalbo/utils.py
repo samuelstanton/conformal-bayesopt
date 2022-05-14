@@ -238,18 +238,16 @@ def optimize_acqf_and_get_observation(
         sequential = True
         kwargs.pop("q")
         kwargs.pop("sequential")
+        kwargs.pop("return_best_only")
     else:
         optimizer = optimize_acqf
 
     # optimize
     candidates, acq_vals = optimizer(**kwargs)
-    candidates = candidates.detach()
-    q_batch_shape = candidates.shape[:-2]
+    # reshape
+    all_x = candidates.view(-1, BATCH_SIZE, bounds.size(-1)).detach()
     # accommodate sequentially optimized batches
-    acq_vals = acq_vals.detach().view(*q_batch_shape, -1).sum(-1)
-
-    all_x = candidates.flatten(0, -3)
-    all_acq_vals = acq_vals.flatten()
+    all_acq_vals = acq_vals.detach().view(all_x.size(0), -1).sum(-1)
 
     # rescale candidates before passing to obj fn
     cube_loc = fn.bounds[0].to(all_x)
