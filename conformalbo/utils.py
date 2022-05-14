@@ -1,5 +1,6 @@
 import torch
 import argparse
+import numpy as np
 
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.constraints import Interval
@@ -16,7 +17,10 @@ from botorch.test_functions.multi_objective import (
 )
 from botorch.optim.optimize import optimize_acqf, optimize_acqf_list
 
-from ratio_estimation import optimize_acqf_sgld, optimize_acqf_sgld_list
+try:
+    from ratio_estimation import optimize_acqf_sgld, optimize_acqf_sgld_list
+except ImportError:
+    from conformalbo.ratio_estimation import optimize_acqf_sgld, optimize_acqf_sgld_list
 
 
 def parse():
@@ -37,19 +41,49 @@ def parse():
     return parser.parse_args()
 
 
-def generate_initial_data(n, fn, NOISE_SE, device, dtype, is_poisson=False):
-    # generate training data
-    train_x = torch.rand(
-        n, fn.dim, device=device, dtype=dtype
-    ) 
-    cube_loc = fn.bounds[0]
-    cube_scale = fn.bounds[1] - fn.bounds[0]
+def sample_random_orthant(base_samples, bounds):
+    rand_mask = (torch.rand(bounds.size(-1)) < 0.5).to(bounds)
+    base_samples = 0.5 * rand_mask + 0.5 * base_samples
+    cube_scale = (bounds[1] - bounds[0]) / 2.
+    cube_loc = bounds[0] + rand_mask * cube_scale
+    return base_samples, cube_loc, cube_scale
+
+
+def generate_initial_data(n, fn, NOISE_SE, device, dtype, is_poisson=False, use_sobol_eng=True,
+                          rand_orthant=True):
+    """
+    Generate random training data
+    """
+    sobol_failed = False
+    if use_sobol_eng:
+        try:
+            sobol_eng = torch.quasirandom.SobolEngine(dimension=fn.dim, scramble=True)
+            base_samples = sobol_eng.draw(n).to(device=device, dtype=dtype)
+        except:
+            sobol_failed = True
+            pass
+
+    if not use_sobol_eng or sobol_failed:
+        base_samples = torch.rand(
+            n, fn.dim, device=device, dtype=dtype
+        )
+
+    bounds = fn.bounds.to(base_samples)
+
+    if rand_orthant:
+        train_x, cube_loc, cube_scale = sample_random_orthant(base_samples, bounds)
+    else:
+        train_x = base_samples
+        cube_loc = bounds[0]
+        cube_scale = (bounds[1] - bounds[0])
+
     exact_obj = fn(train_x * cube_scale + cube_loc)
     if exact_obj.ndim == 1:
-        exact_obj = exact_obj.unsqueeze(-1) # add output dimension if we need to
+        exact_obj = exact_obj.unsqueeze(-1)  # add output dimension if we need to
     train_obj = exact_obj + NOISE_SE * torch.randn_like(exact_obj)
     best_observed_value = exact_obj.max().item()
     return train_x, train_obj, best_observed_value
+
 
 def initialize_noise_se(fn, noise_se, device, dtype):
     # we initialize the noise se to [noise_se * the standard deviation of 5k
@@ -185,8 +219,9 @@ def optimize_acqf_and_get_observation(
         "q": BATCH_SIZE,
         "num_restarts": NUM_RESTARTS,
         "raw_samples": RAW_SAMPLES,
-        "options": {"batch_limit": 5, "maxiter": 200},
+        "options": {"batch_limit": 5, "maxiter": 200, "sample_around_best": False},
         "sequential": sequential,
+        "return_best_only": False
     }
 
     if hasattr(acq_func, 'ratio_estimator') and acq_func.ratio_estimator is not None:
@@ -206,15 +241,29 @@ def optimize_acqf_and_get_observation(
         optimizer = optimize_acqf
 
     # optimize
-    candidates, _ = optimizer(**kwargs)
-    
-    # observe new values
-    new_x = candidates.detach()
-    cube_loc = fn.bounds[0]
-    cube_scale = fn.bounds[1] - fn.bounds[0]
-    # TODO: fix unsqueezing here
-    exact_obj = fn(new_x * cube_scale + cube_loc)
-    if exact_obj.ndim == 1:
-        exact_obj = exact_obj.unsqueeze(-1)
-    observed_obj = exact_obj + noise_se * torch.randn_like(exact_obj)
-    return new_x, observed_obj, exact_obj
+    candidates, acq_vals = optimizer(**kwargs)
+    candidates = candidates.detach()
+    q_batch_shape = candidates.shape[:-2]
+    # accommodate sequentially optimized batches
+    acq_vals = acq_vals.detach().view(*q_batch_shape, -1).sum(-1)
+
+    all_x = candidates.flatten(0, -3)
+    all_acq_vals = acq_vals.flatten()
+
+    # rescale candidates before passing to obj fn
+    cube_loc = fn.bounds[0].to(all_x)
+    cube_scale = (fn.bounds[1] - fn.bounds[0]).to(all_x)
+    all_f = fn(all_x * cube_scale + cube_loc)
+    all_f = all_f.view(all_x.size(0), BATCH_SIZE, -1)
+    all_y = all_f + noise_se * torch.randn_like(all_f)
+
+    best_idx = all_acq_vals.argmax()
+    best_x = all_x[best_idx]
+    best_y = all_y[best_idx]
+    best_f = all_f[best_idx]
+    best_a = all_acq_vals[best_idx]
+
+    # print(f"acq fn opt: best {best_a.item():0.4f}, worst {all_acq_vals.min():0.4f}")
+    # print(f"x*: {best_x}")
+
+    return best_x, best_y, best_f, best_a, all_x, all_y

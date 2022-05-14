@@ -45,7 +45,7 @@ class ConformalAcquisition(object):
 
         target_grid, grid_logp, conf_pred_mask, conditioned_model = construct_conformal_bands(
             self.model, X, self.alpha, self.temp, self.grid_res, self.max_grid_refinements,
-            self.grid_sampler, self.ratio_estimator
+            self.grid_sampler, self.ratio_estimator, mask_ood=True
         )
         return target_grid, grid_logp, conf_pred_mask, conditioned_model
 
@@ -226,19 +226,22 @@ def _conformal_integration(values, conf_pred_mask, grid_logp, alpha, opt_mask):
     opt_mask = opt_mask.prod(-1, keepdim=True)
     conf_pred_mask = conf_pred_mask.prod(-1, keepdim=True)
 
-    combined_mask = conf_pred_mask * opt_mask
+    # combined_mask = conf_pred_mask * opt_mask
 
     with torch.no_grad():
         # count total number of optimistic outcomes
-        opt_mask_weight = opt_mask.sum(-3, keepdim=True) + 1e-6
-        nonconf_weights = opt_mask / opt_mask_weight
-        # importance weights
-        conf_weights = 1. / (grid_logp.exp() + 1e-6)
-        # count number of optimistic outcomes in conformal set
-        scaling_factor = (combined_mask * conf_weights).sum(dim=-3, keepdim=True)
-        # normalize importance weights
-        conf_weights = conf_weights / (scaling_factor + 1e-6)
+        opt_mask_weight = opt_mask.sum(-3, keepdim=True)
+        nonconf_weights = opt_mask / opt_mask_weight.clamp_min(1e-6)
 
-    combined_weights = alpha * nonconf_weights + (1. - alpha) * combined_mask * conf_weights
+        # importance weights
+        conf_weights = 1. / grid_logp.exp().clamp_min(1e-6)
+        num_accepted = conf_pred_mask.sum(-3, keepdim=True)
+        conf_weights /= num_accepted.clamp_min(1.)
+        # count number of optimistic outcomes in conformal set
+        scaling_factor = (opt_mask * conf_weights).sum(dim=-3, keepdim=True)
+        # normalize importance weights
+        conf_weights = (opt_mask * conf_weights) / scaling_factor.clamp_min(1e-6)
+
+    combined_weights = alpha * nonconf_weights + (1. - alpha) * conf_pred_mask * conf_weights
     values = (combined_weights * values[..., None]).sum(-3)
     return values

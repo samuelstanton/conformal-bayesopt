@@ -136,7 +136,7 @@ def optimize_acqf_sgld(
                 fixed_features=fixed_features,
                 post_processing_func=post_processing_func,
                 batch_initial_conditions=None,
-                return_best_only=True,
+                return_best_only=return_best_only,
                 sequential=False,
             )
             candidate_list.append(candidate)
@@ -150,7 +150,7 @@ def optimize_acqf_sgld(
             logger.info(f"Generated sequential candidate {i+1} of {q}")
         # Reset acq_func to previous X_pending state
         acq_function.set_X_pending(base_X_pending)
-        return candidates, torch.stack(acq_value_list)
+        return candidates, torch.stack(acq_value_list, dim=-1)
 
     options = options or {}
 
@@ -208,17 +208,18 @@ def optimize_acqf_sgld(
     sgld_iterates = [
         [] for _ in batched_ics
     ]
+    dr_estimates = [acq_function.ratio_estimator(batch_initial_conditions), None]
     for _s in range(sgld_steps):
         for batch_idx, (ic_batch, batch_optimizer) in enumerate(zip(batched_ics, sgld_optimizers)):
-            ic_batch.requires_grad_(True)
-            batched_acq_values_ = acq_function(ic_batch)
-
+            # once SGLD chain has warmed up start training density ratio estimator
             if _s >= warmup_steps:
                 sgld_iterates[batch_idx].append(ic_batch.detach().clone())
                 if callable(options.get('callback')):
                     options.get('callback')(ic_batch.detach().clone().cpu())
 
             if _s < (sgld_steps - 1):
+                ic_batch.requires_grad_(True)
+                batched_acq_values_ = acq_function(ic_batch)
                 batch_optimizer.zero_grad()
                 neg_log_density = -batched_acq_values_.sum()
                 lb_violation = torch.max(
@@ -232,34 +233,45 @@ def optimize_acqf_sgld(
                 loss = neg_log_density + 1e2 * (lb_violation + ub_violation)
                 loss.backward()
                 batch_optimizer.step()
+
+            # dr_estimates[1] = acq_function.ratio_estimator(batch_initial_conditions)
+            # dr_est_diff = torch.norm(dr_estimates[0] - dr_estimates[1]) / torch.norm(dr_estimates[1] + 1e-6)
+            # print(f"density ratio estimate rel diff: {dr_est_diff.item():0.4f}")
+            # dr_estimates[0] = dr_estimates[1].clone()
+
     batched_iterates = [torch.stack(iterates) for iterates in sgld_iterates]
     batch_candidates = torch.cat(batched_iterates, dim=1)
 
     # final evaluation
     with torch.no_grad():
-        batch_shape = batch_candidates.shape[:-2]
         flat_cands = batch_candidates.flatten(0, -3)
-        batched_acq_vals = [
+        flat_acq_vals = torch.cat([
             acq_function(cand_batch) for cand_batch in flat_cands.split(batch_limit)
-        ]
-        flat_acq_vals = torch.cat(batched_acq_vals)
-        batch_acq_values = flat_acq_vals.view(*batch_shape)
+        ])
+
+    # check bounds
+    try:
+        # in bounds elementwise?
+        in_bounds = (flat_cands >= bounds[0]).prod(-1) * (flat_cands <= bounds[1]).prod(-1)
+        # in bounds batchwise?
+        in_bounds = in_bounds.prod(-1).bool()
+        batch_candidates = flat_cands[in_bounds]
+        batch_acq_values = flat_acq_vals[in_bounds]
+    # if none feasible, use initial solutions
+    except:
+        print('all SGLD iterates out of bounds, reverting to initial conditions')
+        batch_candidates = batch_initial_conditions.flatten(0, -3)
+        batch_acq_values = torch.cat([
+            acq_function(cand_batch) for cand_batch in batch_candidates.split(batch_limit)
+        ])
 
     if post_processing_func is not None:
         batch_candidates = post_processing_func(batch_candidates)
 
     if return_best_only:
-        # in bounds elementwise?
-        in_bounds = (flat_cands >= bounds[0]).prod(-1) * (flat_cands <= bounds[1]).prod(-1)
-        # in bounds batchwise?
-        in_bounds = in_bounds.prod(-1).bool()
-
-        flat_cands = flat_cands[in_bounds]
-        flat_acq_vals = flat_acq_vals[in_bounds]
-
-        best = torch.argmax(flat_acq_vals, dim=0)
-        batch_candidates = flat_cands[best]
-        batch_acq_values = flat_acq_vals[best]
+        best = torch.argmax(batch_acq_values, dim=0)
+        batch_candidates = batch_candidates[best]
+        batch_acq_values = batch_acq_values[best]
 
     if isinstance(acq_function, OneShotAcquisitionFunction):
         if not kwargs.get("return_full_tree", False):
@@ -278,6 +290,7 @@ def optimize_acqf_sgld_list(
     equality_constraints: Optional[List[Tuple[Tensor, Tensor, float]]] = None,
     fixed_features: Optional[Dict[int, float]] = None,
     post_processing_func: Optional[Callable[[Tensor], Tensor]] = None,
+    return_best_only: bool = True,
 ) -> Tuple[Tensor, Tensor]:
     r"""Generate a list of candidates from a list of acquisition functions.
     The acquisition functions are optimized in sequence, with previous candidates
@@ -335,13 +348,13 @@ def optimize_acqf_sgld_list(
             equality_constraints=equality_constraints,
             fixed_features=fixed_features,
             post_processing_func=post_processing_func,
-            return_best_only=True,
+            return_best_only=return_best_only,
             sequential=False,
         )
         candidate_list.append(candidate)
         acq_value_list.append(acq_value)
         candidates = torch.cat(candidate_list, dim=-2)
-    return candidates, torch.stack(acq_value_list)
+    return candidates, torch.stack(acq_value_list, dim=-1)
 
 
 class RatioEstimator(nn.Module):
@@ -394,7 +407,7 @@ class RatioEstimator(nn.Module):
             # )
             self.recompute_emp_prior()
 
-    def __init__(self, in_size=1, device=None, dtype=None, ema_weight=1e-2):
+    def __init__(self, in_size=1, device=None, dtype=None, ema_weight=1e-2, lr=1e-3):
         super().__init__()
 
         self.device = device
@@ -421,7 +434,7 @@ class RatioEstimator(nn.Module):
         self._ema_weight = ema_weight
 
         self.criterion = torch.nn.BCEWithLogitsLoss()
-        self.optim = torch.optim.Adam(self.classifier.parameters(), lr=1e-3)
+        self.optim = torch.optim.Adam(self.classifier.parameters(), lr=lr)
 
     @torch.no_grad()
     def forward(self, inputs):

@@ -71,9 +71,11 @@ def main(
     print(f"function: {problem}, x bounds: {bounds}")
 
     keys = ["cucb", "cei", "cnei", "ucb", "ei", "nei", "rnd"]
-    # keys = ["ckg", "cucb", "kg", "ucb", "rnd"]
+    # keys = ["cucb", "ucb", "rnd"]
     best_actual = {k: [] for k in keys}
-    coverage = {k: [] for k in keys}
+    acq_max = {k: [] for k in keys}
+    iid_coverage = {k: [] for k in keys}
+    query_coverage = {k: [] for k in keys}
 
     # initialize noise se
     problem_noise_se = initialize_noise_se(bb_fn, noise_se, device=device, dtype=dtype)
@@ -117,8 +119,9 @@ def main(
             # get the data
             all_inputs, all_targets = data_dict[k]
             perm = np.random.permutation(np.arange(all_inputs.size(0)))
-            num_test = math.ceil(0.2 * all_inputs.size(0))
-            num_train = all_inputs.size(0) - num_test
+            num_total = all_inputs.size(0)
+            num_test = math.ceil(0.2 * num_total)
+            num_train = num_total - num_test
             # print(f"train: {num_train}, test: {num_test}")
 
             test_inputs, test_targets = all_inputs[perm][:num_test], all_targets[perm][:num_test]
@@ -140,7 +143,6 @@ def main(
             test_targets = trans(test_targets)[0]
 
             alpha = max(1.0 / math.sqrt(num_train), min_alpha)
-
             conformal_kwargs = dict(
                 alpha=alpha,
                 grid_res=tgt_grid_res,
@@ -150,15 +152,15 @@ def main(
             
             torch.cuda.empty_cache()
 
-            # now assess coverage on the heldout set
+            # now assess coverage on an IID heldout set
             conformal_kwargs['temp'] = 1e-6  # set temp to low value when evaluating coverage
-            coverage[k].append(
+            iid_coverage[k].append(
                 assess_coverage(model, test_inputs, test_targets, **conformal_kwargs)
             )
-            last_cvrg = coverage[k][-1]
+            last_cvrg = iid_coverage[k][-1]
             print(
-                f"{k}: cred. coverage {last_cvrg[0]:0.4f}, conf. coverage {last_cvrg[1]:0.4f}, "
-                f"target coverage: {1 - alpha:0.4f}"
+                f"IID coverage ({k}): credible {last_cvrg[0]:0.4f}, conformal {last_cvrg[1]:0.4f}, "
+                f"target level: {1 - alpha:0.4f}"
             )
             model.train()
             torch.cuda.empty_cache()
@@ -188,7 +190,8 @@ def main(
                 DataSplit(all_inputs.cpu(), torch.zeros(all_inputs.size(0), 1))
             )
 
-            conformal_kwargs['alpha'] = max(1.0 / math.sqrt(all_inputs.size(0)), min_alpha)
+            alpha = max(1.0 / math.sqrt(num_total), min_alpha)
+            conformal_kwargs['alpha'] = alpha
             conformal_kwargs['temp'] = temp
             conformal_kwargs['max_grid_refinements'] = 0
             conformal_kwargs['ratio_estimator'] = rx_estimator
@@ -248,33 +251,60 @@ def main(
                 )
 
             # optimize acquisition
-            new_x, observed_obj, exact_obj = optimize_acqf_and_get_observation(
+            new_x, new_y, new_f, new_a, all_x, all_y = optimize_acqf_and_get_observation(
                 acqf, **optimize_acqf_kwargs
             )
+
+            # evaluate coverage on query candidates
+            sample_idxs = np.random.permutation(all_x.shape[0])[:math.ceil(num_test / batch_size)]
+            test_inputs = torch.cat(
+                [new_x, all_x[sample_idxs].flatten(0, -2)]
+            )
+            test_targets = trans(torch.cat(
+                [new_y, all_y[sample_idxs].flatten(0, -2)]
+            ))[0]
+            conformal_kwargs['temp'] = 1e-6  # set temp to low value when evaluating coverage
+            conformal_kwargs['max_grid_refinements'] = max_grid_refinements
+            query_coverage[k].append(
+                assess_coverage(model, test_inputs, test_targets, **conformal_kwargs)
+            )
+            last_cvrg = query_coverage[k][-1]
+            print(
+                f"query coverage ({k}): credible {last_cvrg[0]:0.4f}, conformal {last_cvrg[1]:0.4f}, "
+                f"target level: {1 - alpha:0.4f}"
+            )
+
+            # free up GPU memory
             del acqf
             model.train()
             del model
             torch.cuda.empty_cache()
         
             best_actual[k].append(
-                max(best_actual[k][-1], exact_obj.max().item())
+                max(best_actual[k][-1], new_f.max().item())
             )
+            acq_max[k].append(new_a.item())
 
             # update dataset
             all_inputs = torch.cat([all_inputs, new_x])
-            all_targets = torch.cat([all_targets, observed_obj])
+            all_targets = torch.cat([all_targets, new_y])
             data_dict[k] = (all_inputs, all_targets)
 
         t1 = time.time()
 
-        best = {key: val[-1] for key, val in best_actual.items()}
+        # best = {key: val[-1] for key, val in best_actual.items()}
         if verbose:
-            print(f"\nBatch: {iteration:>2}, time: {t1-t0:>4.2f}, alpha: {alpha:0.4f}, best values:")
-            [print(f"{key}: {val:0.4f}") for key, val in best.items()]
+            print(f"\nBatch: {iteration:>2}, time: {t1-t0:>4.2f}, alpha: {alpha:0.4f}")
+            # print("max acq val:")
+            # [print(f"{key}: {val[-1]:0.4f}") for key, val in acq_max.items() if len(val)]
+            print("best score so far:")
+            [print(f"{key}: {val[-1]:0.4f}") for key, val in best_actual.items()]
 
     output_dict = {
         "best_achieved": best_actual,
-        "coverage": coverage,
+        "acq_max_val": acq_max,
+        "coverage": iid_coverage,
+        "query_coverage": query_coverage,
         "inputs": {k: data_dict[k][0] for k in keys},
     }
     return output_dict
