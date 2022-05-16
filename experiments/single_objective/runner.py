@@ -58,6 +58,7 @@ def main(
     sgld_steps: int = 100,
     sgld_temperature: float = 1e-3,
     sgld_lr: int = 1e-3,
+    rand_orthant: bool = False,
 ):
     dtype = torch.double if dtype == "double" else torch.float
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -88,7 +89,9 @@ def main(
         all_inputs,
         all_targets,
         best_actual_obj,
-    ) = generate_initial_data(num_init, bb_fn, problem_noise_se, device, dtype)
+    ) = generate_initial_data(num_init, bb_fn, problem_noise_se, device, dtype,
+            rand_orthant=rand_orthant,
+    )
 
     data_dict = {}
     for k in keys:
@@ -101,6 +104,9 @@ def main(
         "fn": bb_fn,
         "noise_se": problem_noise_se,
     }
+    
+    # the implicit amount of noise changes by iteration
+    current_noise_se = noise_se
 
     # run N_BATCH rounds of BayesOpt after the initial random batch
     for iteration in range(1, n_batch + 1):
@@ -129,13 +135,16 @@ def main(
 
             test_inputs, test_targets = all_inputs[perm][:num_test], all_targets[perm][:num_test]
             train_inputs, train_targets = all_inputs[perm][num_test:], all_targets[perm][num_test:]
+            
+            current_noise_se = (problem_noise_se / train_targets.std(0)).clamp(min=0.01).item()
+            print("noise se is now: ", current_noise_se)
 
             # prepare new model, transform
             mll, model, trans = initialize_model(
                 train_inputs,
                 train_targets,
                 method=method,
-                train_yvar=noise_se**2,
+                train_yvar=current_noise_se**2,
             )
             model.requires_grad_(True)
             fit_gpytorch_model(mll)
@@ -177,7 +186,7 @@ def main(
                 all_inputs,
                 all_targets,
                 method=method,
-                train_yvar=noise_se**2,
+                train_yvar=current_noise_se**2,
             )
             model.requires_grad_(True)
             fit_gpytorch_model(mll)

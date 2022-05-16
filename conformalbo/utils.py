@@ -8,7 +8,7 @@ from gpytorch.mlls import ExactMarginalLogLikelihood
 
 from botorch.models.transforms import Standardize, Normalize
 from botorch.models import SingleTaskGP
-from botorch.test_functions import Branin, Levy, Ackley
+from botorch.test_functions import Branin, Levy, Ackley, Michalewicz
 from botorch.test_functions.multi_objective import (
     BraninCurrin,
     Penicillin,
@@ -41,6 +41,7 @@ def parse():
     parser.add_argument("--sgld_steps", type=int, default=100)
     parser.add_argument("--sgld_temperature", type=float, default=1e-3)
     parser.add_argument("--sgld_lr", type=float, default=1e-3)
+    parser.add_argument("--rand_orthant", action="store_true")
     return parser.parse_args()
 
 
@@ -188,6 +189,8 @@ def get_problem(problem, dim, num_objectives=1):
         return Branin(negate=True)
     elif problem == "ackley":
         return Ackley(dim=dim, negate=True)
+    elif problem == "michal":
+        return Michalewicz(dim=dim, negate=True)
     elif problem == "branincurrin":
         return BraninCurrin(negate=True)
     elif problem == "zdt2":
