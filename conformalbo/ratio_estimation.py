@@ -42,7 +42,7 @@ def optimize_acqf_sgld(
     warmup_steps: int = 32,
     sgld_steps: int = 256,
     lr: float = 1e-3,
-    temperature: float = 1e-1,
+    temperature: float = 5e-2,
     **kwargs: Any,
 ) -> Tuple[Tensor, Tensor]:
     r"""Generate a set of candidates via multi-start optimization.

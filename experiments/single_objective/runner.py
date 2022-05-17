@@ -5,6 +5,8 @@ import time
 import math
 import os
 
+from scipy.stats import norm
+
 from botorch.acquisition.monte_carlo import (
     qExpectedImprovement,
     qNoisyExpectedImprovement,
@@ -182,6 +184,7 @@ def main(
             model.train()
             torch.cuda.empty_cache()
 
+            # don't fix noise, scale is wrong
             mll, model, trans = initialize_model(
                 all_inputs,
                 all_targets,
@@ -227,7 +230,7 @@ def main(
             elif k == "ucb":
                 acqf = qUpperConfidenceBound(
                     **base_kwargs,
-                    beta=1.,
+                    beta=norm.ppf(1. - alpha / 2.),
                 )
             elif k == "kg":
                 acqf = qKnowledgeGradient(
@@ -255,7 +258,7 @@ def main(
                     **conformal_kwargs,
                     optimistic=True,
                     **base_kwargs,
-                    beta=1.,
+                    beta=norm.ppf(1. - alpha / 2.),
                 )
             elif k == "ckg":
                 acqf = qConformalKnowledgeGradient(

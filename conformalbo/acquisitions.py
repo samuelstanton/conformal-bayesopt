@@ -230,8 +230,11 @@ def _conformal_integration(values, conf_pred_mask, grid_logp, alpha, opt_mask):
 
     with torch.no_grad():
         # count total number of optimistic outcomes
-        opt_mask_weight = opt_mask.sum(-3, keepdim=True)
-        nonconf_weights = opt_mask / opt_mask_weight.clamp_min(1e-6)
+        nonconf_weights = 1.
+        num_rejected = (1. - conf_pred_mask).sum(-3, keepdim=True)
+        nonconf_weights = nonconf_weights / num_rejected.clamp_min(1.)
+        scaling_factor = (opt_mask * nonconf_weights).sum(-3, keepdim=True)
+        nonconf_weights = (opt_mask * nonconf_weights) / scaling_factor.clamp_min(1e-6)
 
         # importance weights
         conf_weights = 1. / grid_logp.exp().clamp_min(1e-6)
@@ -242,6 +245,8 @@ def _conformal_integration(values, conf_pred_mask, grid_logp, alpha, opt_mask):
         # normalize importance weights
         conf_weights = (opt_mask * conf_weights) / scaling_factor.clamp_min(1e-6)
 
-    combined_weights = alpha * nonconf_weights + (1. - alpha) * conf_pred_mask * conf_weights
+    nonconf_weights = alpha * (1. - conf_pred_mask) * nonconf_weights
+    conf_weights = (1. - alpha) * conf_pred_mask * conf_weights
+    combined_weights = nonconf_weights + conf_weights
     values = (combined_weights * values[..., None]).sum(-3)
     return values

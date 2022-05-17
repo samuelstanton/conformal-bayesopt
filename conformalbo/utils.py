@@ -150,10 +150,10 @@ def update_random_observations(
     drawing a new random point, observing its value, and updating the list.
     """
     rand_x = torch.rand(BATCH_SIZE, dim).to(bounds) * (bounds[1] - bounds[0]) + bounds[0]
-    rand_y = problem(rand_x)
+    rand_f = problem(rand_x)
     # return true fn value
-    next_random_best = rand_y.max().item()
-    # rand_y += noise_se * torch.randn_like(rand_y)
+    next_random_best = rand_f.max().item()
+    # rand_y = rand_f + noise_se * torch.randn_like(rand_f)
     best_random.append(max(best_random[-1], next_random_best))
     return best_random
 
