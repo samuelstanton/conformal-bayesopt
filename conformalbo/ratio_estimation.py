@@ -445,7 +445,6 @@ class RatioEstimator(nn.Module):
         self.criterion = torch.nn.BCEWithLogitsLoss()
         self.optim = torch.optim.Adam(self.classifier.parameters(), lr=lr)
 
-    @torch.no_grad()
     def forward(self, inputs):
         _p = self._target_network(inputs).squeeze(-1).sigmoid()
         # return self.dataset.emp_prior * _p / (1 - _p + 1e-8)

@@ -43,18 +43,17 @@ class ConformalAcquisition(object):
         if self.model is None:
             raise AttributeError("ConformalAcquisition must be subclassed")
 
-        target_grid, grid_logp, conf_pred_mask, conditioned_model = construct_conformal_bands(
+        return construct_conformal_bands(
             self.model, X, self.alpha, self.temp, self.grid_res, self.max_grid_refinements,
             self.grid_sampler, self.ratio_estimator, mask_ood=True
         )
-        return target_grid, grid_logp, conf_pred_mask, conditioned_model
 
     def _nonconformal_fwd(self, X, conditioned_model):
         raise NotImplementedError("ConformalAcquisition must be subclassed")
 
     def _conformal_fwd(self, X):
         orig_batch_shape = X.shape[:-1]
-        target_grid, grid_logp, conf_pred_mask, conditioned_model = self._conformalize_model(X)
+        target_grid, grid_logp, conf_pred_mask, conditioned_model, ood_mask = self._conformalize_model(X)
 
         if self.optimistic:
             with torch.no_grad():
@@ -69,7 +68,7 @@ class ConformalAcquisition(object):
         # standard forward pass using conditioned models
         values = self._nonconformal_fwd(reshaped_x, conditioned_model)
         # integrate w.r.t. batch outcome
-        res = _conformal_integration(values, conf_pred_mask, grid_logp, self.alpha, opt_mask)
+        res = _conformal_integration(values, conf_pred_mask, grid_logp, self.alpha, opt_mask, ood_mask)
 
         return res.view(*orig_batch_shape)
 
@@ -181,7 +180,7 @@ class qConformalKnowledgeGradient(ConformalAcquisition, qKnowledgeGradient):
                 [X_actual, match_batch_shape(self.X_pending, X_actual)], dim=-2
             )
 
-        target_grid, grid_logp, conf_pred_mask, conditioned_model = self._conformalize_model(X_actual)
+        target_grid, grid_logp, conf_pred_mask, conditioned_model, ood_mask = self._conformalize_model(X_actual)
 
         # get the value function
         value_function = _get_value_function(
@@ -212,41 +211,49 @@ class qConformalKnowledgeGradient(ConformalAcquisition, qKnowledgeGradient):
         opt_mask = torch.ones_like(conf_pred_mask)
 
         # integrate w.r.t. X_actual outcome variables
-        res = _conformal_integration(values, conf_pred_mask, grid_logp, self.alpha, opt_mask)
+        res = _conformal_integration(values, conf_pred_mask, grid_logp, self.alpha, opt_mask, ood_mask)
         res = res.max(dim=-1)[0]
         res = res.view(*q_batch_shape)
 
         return res
 
 
-def _conformal_integration(values, conf_pred_mask, grid_logp, alpha, opt_mask):
+def _conformal_integration(values, conf_pred_mask, grid_logp, alpha, opt_mask, ood_mask):
     """
     integrate w.r.t. outcome variables
     """
     opt_mask = opt_mask.prod(-1, keepdim=True)
     conf_pred_mask = conf_pred_mask.prod(-1, keepdim=True)
+    ood_mask = ood_mask.prod(-1, keepdim=True)
 
     # combined_mask = conf_pred_mask * opt_mask
 
-    with torch.no_grad():
-        # count total number of optimistic outcomes
-        nonconf_weights = 1.
-        num_rejected = (1. - conf_pred_mask).sum(-3, keepdim=True)
-        nonconf_weights = nonconf_weights / num_rejected.clamp_min(1.)
-        scaling_factor = (opt_mask * nonconf_weights).sum(-3, keepdim=True)
-        nonconf_weights = (opt_mask * nonconf_weights) / scaling_factor.clamp_min(1e-6)
+    # with torch.no_grad():
+    #     # count total number of optimistic outcomes
+    #     nonconf_weights = 1.
+    #     num_rejected = (1. - conf_pred_mask).sum(-3, keepdim=True)
+    #     nonconf_weights = nonconf_weights / num_rejected.clamp_min(1.)
+    #     scaling_factor = (opt_mask * nonconf_weights).sum(-3, keepdim=True)
+    #     nonconf_weights = (opt_mask * nonconf_weights) / scaling_factor.clamp_min(1e-6)
+    #
+    #     # importance weights
+    #     conf_weights = 1. / grid_logp.exp().clamp_min(1e-6)
+    #     num_accepted = conf_pred_mask.sum(-3, keepdim=True)
+    #     conf_weights = conf_weights / num_accepted.clamp_min(1.)
+    #     # count number of optimistic outcomes in conformal set
+    #     scaling_factor = (opt_mask * conf_weights).sum(dim=-3, keepdim=True)
+    #     # normalize importance weights
+    #     conf_weights = (opt_mask * conf_weights) / scaling_factor.clamp_min(1e-6)
+    #
+    # nonconf_weights = alpha * (1. - conf_pred_mask) * nonconf_weights
+    # conf_weights = (1. - alpha) * conf_pred_mask * conf_weights
 
-        # importance weights
-        conf_weights = 1. / grid_logp.exp().clamp_min(1e-6)
-        num_accepted = conf_pred_mask.sum(-3, keepdim=True)
-        conf_weights = conf_weights / num_accepted.clamp_min(1.)
-        # count number of optimistic outcomes in conformal set
-        scaling_factor = (opt_mask * conf_weights).sum(dim=-3, keepdim=True)
-        # normalize importance weights
-        conf_weights = (opt_mask * conf_weights) / scaling_factor.clamp_min(1e-6)
+    nonconf_weights = (1. - conf_pred_mask) * opt_mask
+    nonconf_weights = nonconf_weights / nonconf_weights.sum(-3, keepdim=True).clamp_min(1e-6)
 
-    nonconf_weights = alpha * (1. - conf_pred_mask) * nonconf_weights
-    conf_weights = (1. - alpha) * conf_pred_mask * conf_weights
-    combined_weights = nonconf_weights + conf_weights
-    values = (combined_weights * values[..., None]).sum(-3)
+    conf_weights = (conf_pred_mask * opt_mask) / grid_logp.exp().clamp_min(1e-6)
+    conf_weights = conf_weights / conf_weights.sum(-3, keepdim=True).clamp_min(1e-6)
+
+    combined_weights = (1. - alpha) * conf_weights + alpha * nonconf_weights
+    values = ((1. - ood_mask) * combined_weights * values[..., None]).sum(-3)
     return values
