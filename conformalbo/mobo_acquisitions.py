@@ -135,7 +135,7 @@ class qConformalExpectedHypervolumeImprovement(ConformalAcquisition, qExpectedHy
     
     def _conformal_fwd(self, X):
         orig_batch_shape = X.shape[:-1]
-        target_grid, grid_logp, conf_pred_mask, conditioned_model = self._conformalize_model(X)
+        target_grid, grid_logp, conf_pred_mask, conditioned_model, ood_mask = self._conformalize_model(X)
 
         if self.optimistic:
             with torch.no_grad():
@@ -158,6 +158,7 @@ class qConformalExpectedHypervolumeImprovement(ConformalAcquisition, qExpectedHy
             "grid_logp": grid_logp, 
             "alpha": self.alpha,
             "opt_mask": opt_mask,
+            "ood_mask": ood_mask,
         }
         res = self._conformal_ehvi(samples, reshaped_x, conformal_integration_kwargs)
         
@@ -185,7 +186,7 @@ class qConformalNoisyExpectedHypervolumeImprovement(
 
     def _conformal_fwd(self, X):
         orig_batch_shape = X.shape[:-1]
-        target_grid, grid_logp, conf_pred_mask, conditioned_model = self._conformalize_model(X)
+        target_grid, grid_logp, conf_pred_mask, conditioned_model, ood_mask = self._conformalize_model(X)
 
         if self.optimistic:
             with torch.no_grad():
@@ -215,6 +216,7 @@ class qConformalNoisyExpectedHypervolumeImprovement(
             "grid_logp": grid_logp, 
             "alpha": self.alpha,
             "opt_mask": opt_mask,
+            "ood_mask": ood_mask,
         }
         res = self._conformal_ehvi(samples, reshaped_x, conformal_integration_kwargs)
         

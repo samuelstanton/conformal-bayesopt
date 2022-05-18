@@ -122,7 +122,7 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
 
     # setup
     conditioned_models = None
-    best_result = (-1, None, None, None, None)
+    best_result = (-1, None, None, None, None, None)
     best_refine_step = 0
     for refine_step in range(0, max_grid_refinements + 1):
         # construct target grid, conformal prediction mask
@@ -140,7 +140,7 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         target_grid = torch.movedim(target_grid, 0, -3)
         weights = torch.movedim(weights, 0, -3)
 
-        conf_pred_mask, conditioned_models, q_conf_scores = conformal_gp_regression(
+        conf_pred_mask, conditioned_models, q_conf_scores, ood_mask = conformal_gp_regression(
             model, inputs, target_grid, alpha, temp=temp, ratio_estimator=ratio_estimator,
             mask_ood=mask_ood
         )
@@ -150,7 +150,7 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
         max_accepted = num_accepted.max()
         if min_accepted > best_result[0]:
             best_result = (
-                min_accepted, target_grid, weights, conf_pred_mask, conditioned_models
+                min_accepted, target_grid, weights, conf_pred_mask, conditioned_models, ood_mask
             )
             best_refine_step = refine_step
 
@@ -195,7 +195,7 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
             del conditioned_models
             torch.cuda.empty_cache()
 
-    min_accepted, target_grid, weights, conf_pred_mask, conditioned_models = best_result
+    min_accepted, target_grid, weights, conf_pred_mask, conditioned_models, ood_mask = best_result
     num_accepted = (conf_pred_mask >= 0.5).float().sum(-3)
 
     # TODO improve error handling for case when max_iter is exhausted
@@ -206,7 +206,7 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     # if torch.any(num_accepted < 2):
     #         warnings.warn(msg)
 
-    return target_grid, weights, conf_pred_mask, conditioned_models
+    return target_grid, weights, conf_pred_mask, conditioned_models, ood_mask
 
 
 def conformal_gp_regression(
@@ -290,14 +290,13 @@ def conformal_gp_regression(
             ..., np.arange(-q_batch_size, 0), np.arange(-q_batch_size, 0)
         ] = 1. / (num_old_train + 1)
     else:
-        with torch.no_grad():
-            dr_old_inputs = ratio_estimator(train_inputs[..., :num_old_train, :]).clamp_min(1e-6)
-            dr_new_inputs = ratio_estimator(train_inputs[..., num_old_train:, :]).clamp_min(1e-6)
+        dr_old_inputs = ratio_estimator(train_inputs[..., :num_old_train, :]).clamp_min(1e-6)
+        dr_new_inputs = ratio_estimator(train_inputs[..., num_old_train:, :]).clamp_min(1e-6)
         imp_weights[..., :num_old_train, :] = dr_old_inputs[..., None, :, None]
         imp_weights[
             ..., np.arange(-q_batch_size, 0), np.arange(-q_batch_size, 0)
         ] = dr_new_inputs[..., None, :]
-        imp_weights /= imp_weights.sum(dim=-2, keepdim=True)
+        imp_weights = imp_weights / imp_weights.sum(dim=-2, keepdim=True)
 
     # sum masked importance weights, soft Heaviside again
     cum_weights = (rank_mask * imp_weights).sum(
@@ -306,16 +305,14 @@ def conformal_gp_regression(
     conf_pred_mask = torch.sigmoid((cum_weights - alpha) / temp)
 
     # (acquisition only) apply soft mask to OOD inputs where any target value is accepted
-    if mask_ood:
-        ood_mask = torch.sigmoid((imp_weights[..., num_old_train:, :].sum(-2) - alpha) / temp)
-        conf_pred_mask = (1. - ood_mask) * conf_pred_mask
+    ood_mask = torch.sigmoid((imp_weights[..., num_old_train:, :].sum(-2) - alpha) / temp)
 
     # reshape to (*q_batch_shape, grid_size, q_batch_size, target_dim)
     conf_pred_mask = conf_pred_mask.transpose(-1, -2)
     conf_scores = conf_scores.transpose(-1, -2)
     q_conf_scores = conf_scores[..., num_old_train:, :].detach()
 
-    return conf_pred_mask, updated_gps, q_conf_scores
+    return conf_pred_mask, updated_gps, q_conf_scores, ood_mask
 
 
 def assess_coverage(
@@ -347,7 +344,7 @@ def assess_coverage(
         ).float().mean()
 
         grid_sampler = IIDNormalSampler(grid_res, resample=False, collapse_batch_dims=False)
-        target_grid, _, conf_pred_mask, _ = construct_conformal_bands(
+        target_grid, _, conf_pred_mask, _, _ = construct_conformal_bands(
             model, inputs[:, None], alpha, temp, grid_res,
             max_grid_refinements, grid_sampler, ratio_estimator, mask_ood=False
         )
