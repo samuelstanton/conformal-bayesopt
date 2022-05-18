@@ -230,14 +230,16 @@ def optimize_acqf_sgld(
                 batched_acq_values_ = acq_function(ic_batch)
                 batch_optimizer.zero_grad()
                 neg_log_density = -batched_acq_values_.sum()
-                lb_violation = torch.max(
-                    2 * (torch.sigmoid((bounds[0] - ic_batch) / 1.) - 0.5),
-                    torch.zeros_like(ic_batch),
-                ).sum()
-                ub_violation = torch.max(
-                    2 * (torch.sigmoid((ic_batch - bounds[1]) / 1.) - 0.5),
-                    torch.zeros_like(ic_batch),
-                ).sum()
+                # lb_violation = torch.max(
+                #     2 * (torch.sigmoid((bounds[0] - ic_batch) / 1.) - 0.5),
+                #     torch.zeros_like(ic_batch),
+                # ).sum()
+                # ub_violation = torch.max(
+                #     2 * (torch.sigmoid((ic_batch - bounds[1]) / 1.) - 0.5),
+                #     torch.zeros_like(ic_batch),
+                # ).sum()
+                lb_violation = torch.sigmoid((bounds[0] - ic_batch) / 1e-2).mean()
+                ub_violation = torch.sigmoid((ic_batch - bounds[1]) / 1e-2).mean()
                 loss = neg_log_density + 1e2 * (lb_violation + ub_violation)
                 loss.backward()
                 batch_optimizer.step()
