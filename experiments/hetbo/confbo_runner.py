@@ -23,38 +23,56 @@ from lambo.utils import DataSplit, update_splits
 
 import argparse
 
-bounds = torch.tensor([-10, 10.])
-fn = lambda x: (10. * torch.sin(x)+1) * (torch.sin(3. * x) / x).nan_to_num(1.)
-noise = lambda x: 2.0 * torch.sigmoid(0.5 * x)
+class Sinc:
+    bounds = torch.tensor([[-10, 10.]])
+    
+    fn = lambda _, x: (10. * torch.sin(x)+1) * (torch.sin(3. * x) / x).nan_to_num(1.)
+    noise = lambda _, x: 2.0 * torch.sigmoid(0.5 * x)
 
+    
+class Gramacy:
+    bounds = torch.tensor([[-2., 6.], [-2., 6.]]).t()
+    fn = lambda _, x: -x[..., 0] * torch.exp(-x[..., 0].pow(2.0) - x[..., 1].pow(2.0))
+    noise = lambda _, x: 0.1 * torch.norm(x, -1)
+    
+    
 def parse():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output", type=str, default="results.pt")
     parser.add_argument("--acqf", type=str, default="cucb")
     parser.add_argument("--device", type=int, default=0)
+    parser.add_argument("--fn", type=str, default="sinc")
     return parser.parse_args()
 
-def generate_data_for_gp(inp=None, k = 3, n = 15):
+def generate_data_for_gp(problem, inp=None, k = 3, n = 15):
+    bounds = problem.bounds
+    
     if inp is None:
-        inp = torch.rand(n, 1) * (bounds[1] - bounds[0]) + bounds[0]
-        inp = inp[inp.abs() > 3]
-        inp = inp.view(-1,1)
-    full_y = torch.stack([fn(inp) + noise(inp).sqrt() * torch.randn_like(inp) for _ in range(k)])
+        inp = torch.rand(n, bounds.shape[1]) * (bounds[1] - bounds[0]) + bounds[0]
+        if bounds.shape[-1] == 1:
+            inp = inp[inp.abs() > 3]
+            inp = inp.view(-1,1)
+        else:
+            inp = torch.rand(n, 2) # we init to [0,1]^2
+    full_y = torch.stack([problem.fn(inp).view(-1,1) + \
+                          problem.noise(inp).sqrt().view(-1,1) * torch.randn(inp.shape[0], 1).to(inp) for _ in range(k)])
     return inp, full_y.mean(0), full_y.std(0)
 
 def run_conformal_experiment(
     n_steps=80, n_init=10, acqf="cucb",
     mc_samples=64, min_alpha=0.05, temp=0.01,
-    device=0,
+    device=0, fn="sinc",
 ):
-    bounds = torch.tensor([-10, 10.])
-    fn = lambda x: (10. * torch.sin(x)+1) * (torch.sin(3. * x) / x).nan_to_num(1.)
-    noise = lambda x: 0.5 * torch.sigmoid(0.5 * x)
+    if fn == "sinc":
+        problem = Sinc()
+    elif fn == "gramacy":
+        problem = Gramacy()
+    bounds = problem.bounds
 
     device = torch.device("cuda:"+str(device) if torch.cuda.is_available() else "cpu")
 
-    x, y, _ = generate_data_for_gp(k=1, n=n_init)
+    x, y, _ = generate_data_for_gp(problem=problem, k=1, n=n_init)
     x = x.to(device)
     y = y.to(device)
     # for step in range(n_steps):
@@ -104,7 +122,7 @@ def run_conformal_experiment(
 
         candidates, _ = optimize_acqf_sgld(
             acq_function=acqf,
-            bounds=bounds.view(2,1).to(device),
+            bounds=bounds.to(device),
             q=1,
             num_restarts = 5,
             raw_samples=256,
@@ -112,8 +130,8 @@ def run_conformal_experiment(
             sgld_temperature=0.05,
             sgld_lr=1e-3,
         )
-        next_x = candidates.view(-1,1)
-        _, next_y, _ = generate_data_for_gp(next_x, k=1)
+        next_x = candidates.view(1, -1)
+        _, next_y, _ = generate_data_for_gp(problem=problem, inp=next_x, k=1)
         x = torch.cat((x, next_x.to(device)))
         y = torch.cat((y, next_y.to(device)))
         # y_std = torch.cat((y_std, next_y_std))
@@ -127,5 +145,5 @@ def run_conformal_experiment(
 if __name__ == "__main__":
     args = parse()
     torch.random.manual_seed(args.seed)
-    x, y, _ = run_conformal_experiment(acqf=args.acqf, device=args.device)
+    x, y, _ = run_conformal_experiment(acqf=args.acqf, device=args.device, fn=args.fn)
     torch.save({"x": x, "y": y}, args.output)
