@@ -1,7 +1,5 @@
 setuptools==60.2.0
 numpy==1.22.3
-torch==1.11.0
-torchvision
 git+https://github.com/cornellius-gp/gpytorch.git@master
 git+https://github.com/pytorch/botorch.git@main
 git+https://github.com/samuelstanton/upcycle.git@master

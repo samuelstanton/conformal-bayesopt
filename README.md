@@ -39,11 +39,16 @@ You may also need to rename the FoldX executable (e.g. `mv -v ~/foldx/foldx_2022
 [RDKit](https://www.rdkit.org/) is easiest to install if you're using [Conda](https://docs.conda.io/en/latest/)
 as your package manager (shown below).
 
+#### TorchSort
+Unfortunately torchsort is rather difficult to install. Make sure the CUDA version displayed by `nvcc --version` is the same as the `cudatoolkit` version you install.
+If you don't have `nvcc` torchsort will not be able to run on GPU.
 
 ```bash
 git clone https://github.com/samuelstanton/lambo && cd lambo
 conda create --name lambo-env python=3.8 -y && conda activate lambo-env
 conda install -c conda-forge rdkit -y
+conda install -c pytorch torchvision cudatoolkit=11.3
+pip install --force-reinstall --no-cache-dir --no-deps torchsort
 pip install -r requirements.txt --upgrade
 pip install -e .
 ```

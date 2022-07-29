@@ -38,6 +38,7 @@ from utils import (
 )
 sys.path.append("../../")
 from lambo.utils import DataSplit, update_splits
+from conformalbo.trbo import TurboState, update_state, get_tr_bounds
 
 
 def main(
@@ -64,6 +65,7 @@ def main(
 ):
     dtype = torch.double if dtype == "double" else torch.float
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"using device: {device}")
 
     random.seed(seed)
     np.random.seed(seed)
@@ -76,12 +78,16 @@ def main(
     bounds[1] += 1.
     print(f"function: {problem}, x bounds: {bounds}")
 
-    keys = ["cucb", "cei", "cnei", "ucb", "ei", "nei", "rnd"]
-    # keys = ["cucb", "ucb", "rnd"]
+    # keys = ["cucb", "cei", "cnei", "ucb", "ei", "nei", "rnd"]
+    keys = ["tr_ei", "cei", "ei", "rnd"]
     best_actual = {k: [] for k in keys}
     acq_max = {k: [] for k in keys}
     iid_coverage = {k: [] for k in keys}
     query_coverage = {k: [] for k in keys}
+    global_states = {k: TurboState(
+        batch_size=batch_size,
+        dim=dim,
+    ) for k in keys}
 
     # initialize noise se
     problem_noise_se = initialize_noise_se(bb_fn, noise_se, device=device, dtype=dtype)
@@ -196,6 +202,11 @@ def main(
             model.requires_grad_(False)
             trans.eval()
 
+            if k == 'tr_ei':
+                optimize_acqf_kwargs["bounds"] = get_tr_bounds(all_inputs, all_targets, model, global_states[k])
+            else:
+                optimize_acqf_kwargs["bounds"] = bounds
+
             # now prepare the acquisition
             batch_range = (0, -3) if k[0] == "c" else (0, -2)
             sampler = IIDNormalSampler(num_samples=mc_samples, batch_range=batch_range)
@@ -216,7 +227,7 @@ def main(
             conformal_kwargs['max_grid_refinements'] = 0
             conformal_kwargs['ratio_estimator'] = rx_estimator
 
-            if k == "ei":
+            if k == "ei" or k == 'tr_ei':
                 acqf = qExpectedImprovement(
                     **base_kwargs,
                     best_f=trans(all_targets)[0].max(),
@@ -277,6 +288,9 @@ def main(
             new_x, new_y, new_f, new_a, all_x, all_y = optimize_acqf_and_get_observation(
                 acqf, **optimize_acqf_kwargs
             )
+
+            if k == 'tr_ei':
+                global_states[k] = update_state(global_states[k], new_y)
 
             # evaluate coverage on query candidates
             sample_idxs = np.random.permutation(all_x.shape[0])[:math.ceil(num_test / batch_size)]
