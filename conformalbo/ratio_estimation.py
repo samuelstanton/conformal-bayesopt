@@ -452,6 +452,15 @@ class RatioEstimator(nn.Module):
         # return self.dataset.emp_prior * _p / (1 - _p + 1e-8)
         return _p.clamp_max(1 - 1e-6) / (1 - _p).clamp_min(1e-6)
 
+    def update_target_network(self):
+        with torch.no_grad():
+            for src_p, tgt_p in zip(
+                    self.classifier.parameters(), self._target_network.parameters()
+            ):
+                tgt_p.mul_(1. - self._ema_weight)
+                tgt_p.add_(self._ema_weight * src_p)
+
+
     def optimize_callback(self, xk):
         if isinstance(xk, np.ndarray):
             xk = torch.from_numpy(xk)
@@ -485,13 +494,7 @@ class RatioEstimator(nn.Module):
                 loss = loss_fn(self.classifier(X), y)
                 loss.backward()
                 self.optim.step()
-
-                with torch.no_grad():
-                    for src_p, tgt_p in zip(
-                            self.classifier.parameters(), self._target_network.parameters()
-                    ):
-                        tgt_p.mul_(1. - self._ema_weight)
-                        tgt_p.add_(self._ema_weight * src_p)
+                self.update_target_network()
 
         self.classifier.eval()
         self.classifier.requires_grad_(False)

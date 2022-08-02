@@ -79,7 +79,7 @@ def main(
     print(f"function: {problem}, x bounds: {bounds}")
 
     # keys = ["cucb", "cei", "cnei", "ucb", "ei", "nei", "rnd"]
-    keys = ["tr_ei", "cei", "ei", "rnd"]
+    keys = ["tr_ucb", "ucb", "rnd"]
     best_actual = {k: [] for k in keys}
     acq_max = {k: [] for k in keys}
     iid_coverage = {k: [] for k in keys}
@@ -202,7 +202,7 @@ def main(
             model.requires_grad_(False)
             trans.eval()
 
-            if k == 'tr_ei':
+            if 'tr_' in k:
                 optimize_acqf_kwargs["bounds"] = get_tr_bounds(all_inputs, all_targets, model, global_states[k])
             else:
                 optimize_acqf_kwargs["bounds"] = bounds
@@ -227,18 +227,18 @@ def main(
             conformal_kwargs['max_grid_refinements'] = 0
             conformal_kwargs['ratio_estimator'] = rx_estimator
 
-            if k == "ei" or k == 'tr_ei':
+            if k in ["ei", "tr_ei"]:
                 acqf = qExpectedImprovement(
                     **base_kwargs,
                     best_f=trans(all_targets)[0].max(),
                 )
-            elif k == "nei":
+            elif k in ["nei", "tr_nei"]:
                 acqf = qNoisyExpectedImprovement(
                     **base_kwargs,
                     X_baseline=all_inputs,
                     prune_baseline=True,
                 )
-            elif k == "ucb":
+            elif k in ["ucb", "tr_ucb"]:
                 acqf = qUpperConfidenceBound(
                     **base_kwargs,
                     beta=norm.ppf(1. - alpha / 2.),
@@ -289,7 +289,7 @@ def main(
                 acqf, **optimize_acqf_kwargs
             )
 
-            if k == 'tr_ei':
+            if 'tr_' in k:
                 global_states[k] = update_state(global_states[k], new_y)
 
             # evaluate coverage on query candidates
