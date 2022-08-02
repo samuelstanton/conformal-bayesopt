@@ -14,3 +14,7 @@ hydra_config/hydra/launcher/ray_aws.yaml
 .idea
 *checkpoint.ipynb
 .vscode
+.DS_Store
+*.egg-info
+*.hydra
+
