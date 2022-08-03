@@ -1,0 +1,12 @@
+name: poas_stability
+obj_cols: ["instability_index"]
+obj_signs: [-1]
+exclude_feature_cols:
+  - gravy
+  - foldable
+  - is_stable
+  - passes_filters
+  - header
+  - HeavyAA
+  - LightAA
+src_path: ./conformalbo/assets/pOAS_tab.csv
