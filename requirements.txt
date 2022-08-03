@@ -4,7 +4,7 @@ git+https://github.com/cornellius-gp/gpytorch.git@master
 git+https://github.com/pytorch/botorch.git@main
 git+https://github.com/samuelstanton/upcycle.git@master
 python-levenshtein==0.12.2
-wandb==0.10.28
+wandb==0.12.21
 biopython==1.79
 tabulate==0.8.9
 pypdb==2.0

@@ -34,7 +34,7 @@ from acquisitions import qConformalUpperConfidenceBound
 from ratio_estimation import RatioEstimator
 
 
-@hydra.main(config_path='./', config_name='tabular_search')
+@hydra.main(config_path='./hydra_config', config_name='tabular_search')
 def main(cfg):
     # setup
     random.seed(None)  # make sure random seed resets between multirun jobs for random job-name generation
@@ -93,10 +93,9 @@ def baseline_candidate_split(cfg, src_df):
 
     sorted_df = src_df.sort_values(cfg.task.obj_cols[0])
 
-    assert cfg.baseline_frac < 1
-    num_baseline = int(cfg.baseline_frac * sorted_df.shape[-2])
-    baseline_df = sorted_df.iloc[:num_baseline]
-    candidate_df = sorted_df.iloc[num_baseline:]
+    assert cfg.num_baseline < cfg.num_total_rows
+    baseline_df = sorted_df.iloc[:cfg.num_baseline]
+    candidate_df = sorted_df.iloc[cfg.num_baseline:]
 
     return baseline_df, candidate_df
 
@@ -117,7 +116,7 @@ def fit_and_transform(transform, train_arr, holdout_arr=None):
     return train_result, transform(holdout_arr)
 
 
-def fit_surrogate(cfg, train_X, train_Y):
+def fit_surrogate(train_X, train_Y):
     surrogate = SingleTaskGP(train_X=train_X, train_Y=train_Y)
     surrogate_mll = ExactMarginalLogLikelihood(surrogate.likelihood, surrogate)
     surrogate.train()
@@ -278,10 +277,15 @@ def tabular_search(cfg, dtype, device):
         outcome_transform = transforms.outcome.Standardize(train_outcomes.shape[-1])
         train_X, holdout_X = fit_and_transform(input_transform, train_inputs, holdout_inputs)
         (train_Y, _), (holdout_Y, _) = fit_and_transform(outcome_transform, train_outcomes, holdout_outcomes)
-        surrogate = fit_surrogate(cfg, train_X, train_Y)
+        surrogate = fit_surrogate(train_X, train_Y)
         set_alpha(cfg, train_X.shape[-2])
         holdout_metrics = evaluate_surrogate(cfg, surrogate, holdout_X, holdout_Y, dr_estimator=None, log_prefix='holdout')
         wandb.log(holdout_metrics, step=step_idx)
+        
+        # possible memory leak
+        surrogate.train()
+        del surrogate
+        torch.cuda.empty_cache()
 
         # now prepare to rank candidates
         baseline_inputs, baseline_outcomes = df_to_input_outcome(
@@ -293,7 +297,7 @@ def tabular_search(cfg, dtype, device):
         )
         baseline_X, candidate_X = fit_and_transform(input_transform, baseline_inputs, candidate_inputs)
         (baseline_Y, _), (candidate_Y, _) = fit_and_transform(outcome_transform, baseline_outcomes, candidate_outcomes)
-        surrogate = fit_surrogate(cfg, baseline_X, baseline_Y)
+        surrogate = fit_surrogate(baseline_X, baseline_Y)
         dr_estimator = RatioEstimator(train_X.shape[-1], device, dtype, cfg.dr_estimator.ema_weight)
         dre_metrics = fit_dr_estimator(cfg, dr_estimator, baseline_X, candidate_X)
         wandb.log(dre_metrics, step=step_idx)
@@ -313,6 +317,12 @@ def tabular_search(cfg, dtype, device):
         query_df = candidate_df.iloc[best_idx]
         wandb.log(query_metrics, step=step_idx)
 
+        # possible memory leak
+        del acq_fn
+        surrogate.train()
+        del surrogate
+        torch.cuda.empty_cache()
+
         # log performance
         best_cand_outcome = candidate_df[cfg.task.obj_cols].max(0).values.item()
         perf_metrics["query_outcome"] = query_df[cfg.task.obj_cols].values.item()
@@ -328,11 +338,6 @@ def tabular_search(cfg, dtype, device):
         candidate_df = candidate_df.iloc[:best_idx].append(
             candidate_df.iloc[best_idx + 1:]
         )
-        # try:
-        #     baseline_df = baseline_df.append(query_df, verify_integrity=True)
-        # except ValueError:
-        #     print("query already in baseline set")
-        #     pass
 
     return perf_metrics["cum_regret"]
 

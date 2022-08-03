@@ -267,20 +267,27 @@ def conformal_gp_regression(
 
     # rank by last dim
     original_shape = conf_scores.shape
-    ranks_by_score = torchsort.soft_rank(
-        conf_scores.flatten(0, -2),
-        regularization="l2",
-        regularization_strength=temp,
-    ).view(
-        *original_shape
-    )
+    if temp > 0:
+        ranks_by_score = torchsort.soft_rank(
+            conf_scores.flatten(0, -2),
+            regularization="l2",
+            regularization_strength=temp,
+        ).view(
+            *original_shape
+        )
+    else:
+        argsrt = torch.argsort(conf_scores.flatten(0, -2), dim=-1)
+        ranks_by_score = torch.argsort(argsrt, dim=-1).view(*original_shape)
 
-    # soft Heaviside
     threshold = ranks_by_score[..., num_old_train:]
-    rank_mask = 1. - torch.sigmoid(
-        (ranks_by_score.unsqueeze(-1) - threshold.unsqueeze(-2)) / temp
-    )  # (*q_batch_shape, grid_size, target_dim, num_total, q_batch_size)
-    rank_mask[..., np.arange(-q_batch_size, 0), np.arange(-q_batch_size, 0)] *= 2
+    if temp > 0:
+        # soft Heaviside
+        rank_mask = 1. - torch.sigmoid(
+            (ranks_by_score.unsqueeze(-1) - threshold.unsqueeze(-2)) / temp
+        )  # (*q_batch_shape, grid_size, target_dim, num_total, q_batch_size)
+        rank_mask[..., np.arange(-q_batch_size, 0), np.arange(-q_batch_size, 0)] *= 2
+    else:
+        rank_mask = (threshold.unsqueeze(-2) >= ranks_by_score.unsqueeze(-1))
 
     # get importance weights to adjust for covariate shift
     imp_weights = torch.zeros_like(rank_mask, requires_grad=False)
@@ -302,10 +309,16 @@ def conformal_gp_regression(
     cum_weights = (rank_mask * imp_weights).sum(
         -2
     )  # (*q_batch_shape, grid_size, target_dim, q_batch_size)
-    conf_pred_mask = torch.sigmoid((cum_weights - alpha) / temp)
+    if temp > 0:
+        conf_pred_mask = torch.sigmoid((cum_weights - alpha) / temp)
+    else:
+        conf_pred_mask = (cum_weights > alpha)
 
     # (acquisition only) apply soft mask to OOD inputs where any target value is accepted
-    ood_mask = torch.sigmoid((imp_weights[..., num_old_train:, :].sum(-2) - alpha) / temp)
+    if temp > 0:
+        ood_mask = torch.sigmoid((imp_weights[..., num_old_train:, :].sum(-2) - alpha) / temp)
+    else:
+        ood_mask = (imp_weights[..., num_old_train:, :].sum(-2) >= alpha)
 
     # reshape to (*q_batch_shape, grid_size, q_batch_size, target_dim)
     conf_pred_mask = conf_pred_mask.transpose(-1, -2)
