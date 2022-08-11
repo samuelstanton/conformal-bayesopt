@@ -14,6 +14,7 @@ conformal_params:
   grid_res: 64
   max_grid_refinements: 0
   temp: 1e-6
+  randomized: False
 
 dr_estimator:
   lr: 1e-3
@@ -26,7 +27,7 @@ dtype: float
 seed: 0
 trial_id: ${seed}
 project_name: conformal-bayesopt
-version: v0.0.4
+version: v0.0.5
 
 # Directories for loading and storing data
 data_dir: ./experiments/tabular/data

@@ -66,8 +66,8 @@ def conf_mask_to_bounds(target_grid, conf_pred_mask):
                     lower_bound = grid[grid_lb]
 
                 if grid_ub != mask.shape[0] - 1:
-                    const_upper_term = (0.5 - mask[grid_ub]) * (grid[grid_ub + 1] - grid[grid_ub])\
-                        / (mask[grid_ub + 1] - mask[grid_ub])
+                    const_upper_term = (mask[grid_ub] - 0.5) * (grid[grid_ub + 1] - grid[grid_ub])\
+                        / (mask[grid_ub] - mask[grid_ub + 1])
                     upper_bound = grid[grid_ub] + const_upper_term
                 else:
                     upper_bound = grid[grid_ub]
@@ -94,7 +94,7 @@ def conf_mask_to_bounds(target_grid, conf_pred_mask):
 
 
 def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_refinements, sampler,
-                              ratio_estimator=None, mask_ood=True):
+                              ratio_estimator=None, mask_ood=True, randomized=False):
     """
     Construct dense pointwise target grid and conformal prediction mask
     Args:
@@ -119,10 +119,14 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     model.eval()
     with torch.no_grad():
         y_post = model.posterior(inputs, observation_noise=True)
+        grid_center = y_post.mvn.mean
+        # warning! evaluating bc of weird GPyTorch lazy tensor broadcasting bug
+        grid_covar = y_post.mvn.lazy_covariance_matrix.evaluate().contiguous()
+        y_post = refine_grid_dist(y_post, grid_center, 2. * grid_covar)
 
     # setup
     conditioned_models = None
-    best_result = (-1, None, None, None, None, None)
+    best_result = (float('inf'), None, None, None, None, None)
     best_refine_step = 0
     for refine_step in range(0, max_grid_refinements + 1):
         # construct target grid, conformal prediction mask
@@ -142,51 +146,42 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
 
         conf_pred_mask, conditioned_models, q_conf_scores, ood_mask = conformal_gp_regression(
             model, inputs, target_grid, alpha, temp=temp, ratio_estimator=ratio_estimator,
-            mask_ood=mask_ood
+            mask_ood=mask_ood, randomized=randomized
         )
 
         num_accepted = (conf_pred_mask >= 0.5).float().sum(-3)
         min_accepted = num_accepted.min()
         max_accepted = num_accepted.max()
-        if min_accepted > best_result[0]:
+        accept_ratio = (num_accepted.float() / grid_res)
+        diff = accept_ratio - 0.5
+        grid_score = diff.pow(2).mean()
+        if grid_score < best_result[0]:
             best_result = (
-                min_accepted, target_grid, weights, conf_pred_mask, conditioned_models, ood_mask
+                grid_score, target_grid, weights, conf_pred_mask, conditioned_models, ood_mask
             )
             best_refine_step = refine_step
 
         grid_center = y_post.mvn.mean
-
-        recenter_grid = False
-
-        accept_ratio = (num_accepted.float() / grid_res)
-        diff = accept_ratio - 0.5
-        scale_exp = 2. / q_batch_size  # volume is exponential in the batch size
-        covar_scale = 1. + diff.sign() * diff.abs().pow(scale_exp)
-
         # warning! evaluating bc of weird GPyTorch lazy tensor broadcasting bug
         grid_covar = y_post.mvn.lazy_covariance_matrix.evaluate().contiguous()
-        
+
+        scale_exp = 2. / q_batch_size  # volume is exponential in the batch size
+        covar_scale = 1. + diff.sign() * diff.abs().pow(scale_exp)
         # reshape as (*batch_shape, n, 1)
         # in both batched mt and single task cases
         covar_scale = covar_scale.reshape(*grid_covar.shape[:-1], 1)
         
+        refine_grid = False
+
+        recenter_grid = False
+
         rescale_grid = False
         if min_accepted < 2 or max_accepted > grid_res - 2:
             grid_covar = covar_scale * grid_covar
             rescale_grid = True
 
-        refine_grid = False
-
         if recenter_grid or rescale_grid:
-            if type(y_post.mvn) is MultivariateNormal:
-                init_fn = MultivariateNormal
-                kwargs = {}
-            elif type(y_post.mvn) is MultitaskMultivariateNormal:
-                init_fn = MultitaskMultivariateNormal
-                kwargs = {"interleaved": y_post.mvn._interleaved}
-            y_post = GPyTorchPosterior(
-                init_fn(grid_center, lazify(grid_covar), **kwargs)
-            )
+            y_post = refine_grid_dist(y_post, grid_center, grid_covar)
         if not any([recenter_grid, refine_grid, rescale_grid]):
             break
 
@@ -209,9 +204,22 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     return target_grid, weights, conf_pred_mask, conditioned_models, ood_mask
 
 
+def refine_grid_dist(y_post, grid_center, grid_covar):
+    if type(y_post.mvn) is MultivariateNormal:
+        init_fn = MultivariateNormal
+        kwargs = {}
+    elif type(y_post.mvn) is MultitaskMultivariateNormal:
+        init_fn = MultitaskMultivariateNormal
+        kwargs = {"interleaved": y_post.mvn._interleaved}
+    y_post = GPyTorchPosterior(
+        init_fn(grid_center, lazify(grid_covar), **kwargs)
+    )
+    return y_post
+
+
 def conformal_gp_regression(
     gp, test_inputs, target_grid, alpha=0.2, temp=1e-6, ratio_estimator=None, mask_ood=True,
-    **kwargs
+    randomized=False, **kwargs
 ):
     """
     Full conformal Bayes for exact GP regression.
@@ -265,29 +273,15 @@ def conformal_gp_regression(
     conf_scores = conf_scores.view(*q_batch_shape, grid_size, num_total, target_dim)
     conf_scores = conf_scores.transpose(-1, -2)  # (*q_batch_shape, grid_size, target_dim, num_total)
 
-    # rank by last dim
-    original_shape = conf_scores.shape
+    threshold = conf_scores[..., num_old_train:]
+    # rank_mask.shape = (*q_batch_shape, grid_size, target_dim, num_total, q_batch_size)
+    rank_mask = (threshold.unsqueeze(-2) >= conf_scores.unsqueeze(-1)).to(conf_scores)
     if temp > 0:
-        ranks_by_score = torchsort.soft_rank(
-            conf_scores.flatten(0, -2),
-            regularization="l2",
-            regularization_strength=temp,
-        ).view(
-            *original_shape
-        )
-    else:
-        argsrt = torch.argsort(conf_scores.flatten(0, -2), dim=-1)
-        ranks_by_score = torch.argsort(argsrt, dim=-1).view(*original_shape)
-
-    threshold = ranks_by_score[..., num_old_train:]
-    if temp > 0:
-        # soft Heaviside
+        mask_sum = rank_mask.sum(dim=-2, keepdim=True)
         rank_mask = 1. - torch.sigmoid(
-            (ranks_by_score.unsqueeze(-1) - threshold.unsqueeze(-2)) / temp
-        )  # (*q_batch_shape, grid_size, target_dim, num_total, q_batch_size)
-        rank_mask[..., np.arange(-q_batch_size, 0), np.arange(-q_batch_size, 0)] *= 2
-    else:
-        rank_mask = (threshold.unsqueeze(-2) >= ranks_by_score.unsqueeze(-1))
+            (conf_scores.unsqueeze(-1) - threshold.unsqueeze(-2)) / temp
+        )
+        rank_mask *= mask_sum / rank_mask.sum(dim=-2, keepdim=True)
 
     # get importance weights to adjust for covariate shift
     imp_weights = torch.zeros_like(rank_mask, requires_grad=False)
@@ -303,16 +297,30 @@ def conformal_gp_regression(
         imp_weights[
             ..., np.arange(-q_batch_size, 0), np.arange(-q_batch_size, 0)
         ] = dr_new_inputs[..., None, :]
-        imp_weights = imp_weights / imp_weights.sum(dim=-2, keepdim=True)
+        imp_weights /= imp_weights.sum(dim=-2, keepdim=True)
 
     # sum masked importance weights, soft Heaviside again
-    cum_weights = (rank_mask * imp_weights).sum(
+    masked_weights = rank_mask * imp_weights
+    cum_weights = masked_weights.cumsum(
         -2
-    )  # (*q_batch_shape, grid_size, target_dim, q_batch_size)
+    )  # (*q_batch_shape, grid_size, target_dim, num_total, q_batch_size)
+
+    if randomized:
+        diff = masked_weights[..., -1, :].clamp_min(1e-6)
+        lb_prob = (
+            (cum_weights[..., -1, :] - alpha) / diff
+        ).clamp(0., 1.)
+        randomization_mask = torch.distributions.Bernoulli(probs=lb_prob).sample()
+        cum_weights = cum_weights[..., -2, :] + randomization_mask.to(diff) * diff
+    else:
+        cum_weights = cum_weights[..., -1, :]
+
     if temp > 0:
         conf_pred_mask = torch.sigmoid((cum_weights - alpha) / temp)
     else:
-        conf_pred_mask = (cum_weights > alpha)
+        conf_pred_mask = (cum_weights > alpha).to(cum_weights)
+
+    # import pdb; pdb.set_trace()
 
     # (acquisition only) apply soft mask to OOD inputs where any target value is accepted
     if temp > 0:
@@ -329,7 +337,7 @@ def conformal_gp_regression(
 
 
 def assess_coverage(
-        model, inputs, targets, alpha, temp, grid_res, max_grid_refinements, ratio_estimator=None
+        model, inputs, targets, alpha, temp, grid_res, max_grid_refinements, ratio_estimator=None, randomized=False
 ):
     """
     Args:
@@ -359,7 +367,7 @@ def assess_coverage(
         grid_sampler = IIDNormalSampler(grid_res, resample=False, collapse_batch_dims=False)
         target_grid, _, conf_pred_mask, _, _ = construct_conformal_bands(
             model, inputs[:, None], alpha, temp, grid_res,
-            max_grid_refinements, grid_sampler, ratio_estimator, mask_ood=False
+            max_grid_refinements, grid_sampler, ratio_estimator, mask_ood=False, randomized=randomized
         )
         try:
             conf_lb, conf_ub = conf_mask_to_bounds(target_grid, conf_pred_mask)
