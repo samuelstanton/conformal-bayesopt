@@ -17,4 +17,4 @@ hydra_config/hydra/launcher/ray_aws.yaml
 .DS_Store
 *.egg-info
 *.hydra
-
+notebooks/figures

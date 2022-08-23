@@ -1,0 +1,5 @@
+name: zinc_penalized_logp
+obj_cols: ["penalized_logP"]
+obj_signs: [1]
+exclude_feature_cols: ["smiles", "logP", "penalized_logP", "SA", "qed", "3pbl_docking"]
+src_path: ./conformalbo/assets/zinc_subsample.csv
