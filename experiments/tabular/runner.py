@@ -130,43 +130,56 @@ def fit_surrogate(train_X, train_Y):
 def fit_dr_estimator(cfg, dr_estimator, baseline_X, candidate_X):
     num_baseline = baseline_X.shape[-2]
     num_candidate = candidate_X.shape[-2]
-    emp_ratio = torch.tensor(
-        num_baseline / num_candidate, device=dr_estimator.device
-    )
+
+    baseline_Z = torch.zeros(num_baseline, 1, device=dr_estimator.device)
+    candidate_Z = torch.ones(num_candidate, 1, device=dr_estimator.device)
+    cat_X = torch.cat([baseline_X, candidate_X])
+    cat_Z = torch.cat([baseline_Z, candidate_Z])
+
+    num_val = 0
+    train_X = cat_X
+    train_Z = cat_Z
+    val_X = None
+    val_Z = None
+    
+    # num_val = int(0.1 * cat_X.shape[-2])
+    # rand_perm = np.random.permutation(cat_X.shape[-2])
+
+    # val_X = cat_X[rand_perm[:num_val]]
+    # val_Z = cat_Z[rand_perm[:num_val]]
+    # train_X = cat_X[rand_perm[num_val:]]
+    # train_Z = cat_Z[rand_perm[num_val:]]
+
+    num_train = num_baseline - num_val
+    num_positive = train_Z.sum()
+    emp_ratio = (num_train - num_positive) / num_positive
     loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=emp_ratio)
     dr_estimator.requires_grad_(True)
     optimizer = torch.optim.Adam(
         dr_estimator.parameters(), lr=cfg.dr_estimator.lr, weight_decay=cfg.dr_estimator.weight_decay
     )
     lr_sched = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.dr_estimator.num_grad_steps)
-    baseline_Z = torch.zeros(num_baseline, 1, device=dr_estimator.device)
-    candidate_Z = torch.ones(num_candidate, 1, device=dr_estimator.device)
-    cat_X = torch.cat([baseline_X, candidate_X])
-    cat_Z = torch.cat([baseline_Z, candidate_Z])
 
-    num_val = int(0.2 * cat_X.shape[-2])
-    rand_perm = np.random.permutation(cat_X.shape[-2])
-
-    val_X = cat_X[rand_perm[:num_val]]
-    val_Z = cat_Z[rand_perm[:num_val]]
-    train_X = cat_X[rand_perm[num_val:]]
-    train_Z = cat_Z[rand_perm[num_val:]]
-
-    best_val_loss = float("inf")
+    best_loss = float("inf")
     for _ in range(cfg.dr_estimator.num_grad_steps):
-        with torch.no_grad():
-            val_logits = dr_estimator.classifier(val_X)
-            val_loss = loss_fn(val_logits, val_Z)
+        if num_val > 0:
+            with torch.no_grad():
+                val_logits = dr_estimator.classifier(val_X)
+                val_loss = loss_fn(val_logits, val_Z)
 
         dr_estimator.zero_grad()
         aug_X = train_X + cfg.dr_estimator.noise_aug_scale * torch.randn_like(train_X)
         train_logits = dr_estimator.classifier(aug_X)
         train_loss = loss_fn(train_logits, train_Z)
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss.item()
+        if num_val > 0 and val_loss < best_loss:
+            best_loss = val_loss.item()
             best_weights = copy.deepcopy(dr_estimator.state_dict())
-            ckpt_train_loss = train_loss.item()
+            # ckpt_train_loss = train_loss.item()
+        elif train_loss < best_loss:
+            best_loss = train_loss.item()
+            best_weights = copy.deepcopy(dr_estimator.state_dict())
+            # ckpt_train_loss = train_loss.item()
 
         train_loss.backward()
         optimizer.step()
@@ -176,16 +189,16 @@ def fit_dr_estimator(cfg, dr_estimator, baseline_X, candidate_X):
     dr_estimator.requires_grad_(False)
     dr_estimator.update_target_network()
 
-    tgt_network = dr_estimator._target_network
-    tgt_logits = tgt_network(val_X)
-    tgt_loss = loss_fn(tgt_logits, val_Z).item()
-
     metrics = dict(
-        dre_train_loss=ckpt_train_loss,
-        dre_val_loss=best_val_loss,
-        dre_tgt_loss=tgt_loss,
+        dre_best_loss=best_loss,
         dre_last_train_loss=train_loss.item()
     )
+
+    if num_val > 0:
+        tgt_network = dr_estimator._target_network
+        tgt_logits = tgt_network(val_X)
+        metrics['dre_tgt_loss'] = loss_fn(tgt_logits, val_Z).item()
+        
     display_metrics(metrics)
     return metrics
 
@@ -280,7 +293,7 @@ def tabular_search(cfg, dtype, device):
         surrogate = fit_surrogate(train_X, train_Y)
         set_alpha(cfg, train_X.shape[-2])
         holdout_metrics = evaluate_surrogate(cfg, surrogate, holdout_X, holdout_Y, dr_estimator=None, log_prefix='holdout')
-        wandb.log(holdout_metrics, step=step_idx)
+        perf_metrics.update(holdout_metrics)
         
         # possible memory leak
         surrogate.train()
@@ -300,7 +313,7 @@ def tabular_search(cfg, dtype, device):
         surrogate = fit_surrogate(baseline_X, baseline_Y)
         dr_estimator = RatioEstimator(train_X.shape[-1], device, dtype, cfg.dr_estimator.ema_weight)
         dre_metrics = fit_dr_estimator(cfg, dr_estimator, baseline_X, candidate_X)
-        wandb.log(dre_metrics, step=step_idx)
+        perf_metrics.update(dre_metrics)
 
         # select, evaluate query
         set_alpha(cfg, baseline_X.shape[-2])
@@ -315,7 +328,7 @@ def tabular_search(cfg, dtype, device):
         query_Y = candidate_Y[sorted_idx[:num_holdout]]
         query_metrics = evaluate_surrogate(cfg, surrogate, query_X, query_Y, dr_estimator, log_prefix='query')
         query_df = candidate_df.iloc[best_idx]
-        wandb.log(query_metrics, step=step_idx)
+        perf_metrics.update(query_metrics)
 
         # possible memory leak
         del acq_fn
@@ -330,7 +343,7 @@ def tabular_search(cfg, dtype, device):
         perf_metrics["num_candidate"] = candidate_df.shape[-2]
         perf_metrics["instant_regret"] = best_cand_outcome - perf_metrics["query_outcome"]
         perf_metrics["cum_regret"] += perf_metrics["instant_regret"]
-        display_metrics(perf_metrics)
+        # display_metrics(perf_metrics)
         wandb.log(perf_metrics, step=step_idx)
 
         # add query to baselines

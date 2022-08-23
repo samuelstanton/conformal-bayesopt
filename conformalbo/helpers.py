@@ -286,10 +286,10 @@ def conformal_gp_regression(
     # get importance weights to adjust for covariate shift
     imp_weights = torch.zeros_like(rank_mask, requires_grad=False)
     if ratio_estimator is None:
-        imp_weights[..., :num_old_train, :] = 1.0 / (num_old_train + 1)
+        imp_weights[..., :num_old_train, :] = 1.
         imp_weights[
             ..., np.arange(-q_batch_size, 0), np.arange(-q_batch_size, 0)
-        ] = 1. / (num_old_train + 1)
+        ] = 1.
     else:
         dr_old_inputs = ratio_estimator(train_inputs[..., :num_old_train, :]).clamp_min(1e-6)
         dr_new_inputs = ratio_estimator(train_inputs[..., num_old_train:, :]).clamp_min(1e-6)
@@ -297,7 +297,7 @@ def conformal_gp_regression(
         imp_weights[
             ..., np.arange(-q_batch_size, 0), np.arange(-q_batch_size, 0)
         ] = dr_new_inputs[..., None, :]
-        imp_weights /= imp_weights.sum(dim=-2, keepdim=True)
+    imp_weights /= imp_weights.sum(dim=-2, keepdim=True)
 
     # sum masked importance weights, soft Heaviside again
     masked_weights = rank_mask * imp_weights
@@ -310,7 +310,7 @@ def conformal_gp_regression(
         lb_prob = (
             (cum_weights[..., -1, :] - alpha) / diff
         ).clamp(0., 1.)
-        randomization_mask = torch.distributions.Bernoulli(probs=lb_prob).sample()
+        randomization_mask = torch.distributions.Bernoulli(probs=1. - lb_prob).sample()
         cum_weights = cum_weights[..., -2, :] + randomization_mask.to(diff) * diff
     else:
         cum_weights = cum_weights[..., -1, :]
@@ -319,8 +319,6 @@ def conformal_gp_regression(
         conf_pred_mask = torch.sigmoid((cum_weights - alpha) / temp)
     else:
         conf_pred_mask = (cum_weights > alpha).to(cum_weights)
-
-    # import pdb; pdb.set_trace()
 
     # (acquisition only) apply soft mask to OOD inputs where any target value is accepted
     if temp > 0:

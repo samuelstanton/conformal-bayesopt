@@ -30,13 +30,14 @@ from conformalbo.helpers import (
 
 class ConformalAcquisition(object):
     def __init__(self, alpha, temp, grid_res, max_grid_refinements, ratio_estimator,
-                 optimistic=False, grid_sampler=None, *args, **kwargs):
+                 optimistic=False, grid_sampler=None, randomized=False, *args, **kwargs):
         self.alpha = alpha
         self.temp = temp
         self.grid_res = grid_res
         self.max_grid_refinements = max_grid_refinements
         self.ratio_estimator = ratio_estimator
         self.optimistic = optimistic
+        self.randomized = randomized
         self.grid_sampler = IIDNormalSampler(grid_res) if grid_sampler is None else grid_sampler
 
     def _conformalize_model(self, X):
@@ -45,7 +46,7 @@ class ConformalAcquisition(object):
 
         return construct_conformal_bands(
             self.model, X, self.alpha, self.temp, self.grid_res, self.max_grid_refinements,
-            self.grid_sampler, self.ratio_estimator, mask_ood=True
+            self.grid_sampler, self.ratio_estimator, mask_ood=True, randomized=self.randomized
         )
 
     def _nonconformal_fwd(self, X, conditioned_model):
@@ -137,11 +138,11 @@ class qConformalNoisyExpectedImprovement(ConformalAcquisition, qNoisyExpectedImp
 
 class qConformalUpperConfidenceBound(ConformalAcquisition, qUpperConfidenceBound):
     def __init__(self, alpha, temp, grid_res, max_grid_refinements, ratio_estimator,
-                 optimistic=True, grid_sampler=None, *args, **kwargs):
+                 optimistic=True, grid_sampler=None, randomized=False, *args, **kwargs):
         qUpperConfidenceBound.__init__(self, *args, **kwargs)
         ConformalAcquisition.__init__(
             self, alpha, temp, grid_res, max_grid_refinements, ratio_estimator,
-            optimistic, grid_sampler
+            optimistic, grid_sampler, randomized
         )
 
     def _nonconformal_fwd(self, X, conditioned_model):
