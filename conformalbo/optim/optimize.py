@@ -38,6 +38,7 @@ def optimize_acqf_sgld(
     sgld_steps: int = 256,
     lr: float = 1e-3,
     temperature: float = 5e-2,
+    return_full_traj: bool = False,
     **kwargs: Any,
 ) -> Tuple[Tensor, Tensor]:
     r"""Generate a set of candidates via multi-start optimization.
@@ -209,7 +210,7 @@ def optimize_acqf_sgld(
     ]
     # collect SGLD iterates, bootstrap ratio estimator
     sgld_iterates = [
-        [] for _ in batched_ics
+        [ic_batch.detach().clone()] for ic_batch in batched_ics
     ]
     dr_estimates = [acq_function.ratio_estimator(batch_initial_conditions), None]
     for _s in range(sgld_steps):
@@ -245,45 +246,84 @@ def optimize_acqf_sgld(
             # print(f"density ratio estimate rel diff: {dr_est_diff.item():0.4f}")
             # dr_estimates[0] = dr_estimates[1].clone()
 
-    batched_iterates = [torch.stack(iterates) for iterates in sgld_iterates]
-    batch_candidates = torch.cat(batched_iterates, dim=1)
-
-    # final evaluation
+    batched_iterates = [torch.stack(iterates, dim=1) for iterates in sgld_iterates]
+    batch_candidates = torch.cat(batched_iterates)
     with torch.no_grad():
-        flat_cands = batch_candidates.flatten(0, -3)
-        flat_acq_vals = torch.cat([
-            acq_function(cand_batch) for cand_batch in flat_cands.split(batch_limit)
-        ])
-
-    # check bounds
-    try:
-        # in bounds elementwise?
-        in_bounds = (flat_cands >= bounds[0]).prod(-1) * (flat_cands <= bounds[1]).prod(-1)
-        # in bounds batchwise?
-        in_bounds = in_bounds.prod(-1).bool()
-        batch_candidates = flat_cands[in_bounds]
-        batch_acq_values = flat_acq_vals[in_bounds]
-    # if none feasible, use initial solutions
-    except:
-        print('all SGLD iterates out of bounds, reverting to initial conditions')
-        batch_candidates = batch_initial_conditions.flatten(0, -3)
         batch_acq_values = torch.cat([
-            acq_function(cand_batch) for cand_batch in batch_candidates.split(batch_limit)
-        ])
+            acq_function(cand_batch) for cand_batch in batch_candidates.flatten(0, -3).split(batch_limit)
+        ]).view(batch_candidates.shape[:-2])
+
+    if return_full_traj:
+        pass
+    else:
+        select_cands, select_acq_vals = [], []
+        for cand_traj in batch_candidates:
+            with torch.no_grad():
+                # in bounds elementwise?
+                in_bounds = (cand_traj >= bounds[0]).prod(-1) * (cand_traj <= bounds[1]).prod(-1)
+                # in bounds batchwise?
+                in_bounds = in_bounds.prod(-1).bool()
+                feas_cands = cand_traj[in_bounds]
+                feas_acq_vals = torch.cat([
+                    acq_function(cand_batch) for cand_batch in feas_cands.split(batch_limit)
+                ])
+                best_idx = feas_acq_vals.argmax(0)
+                select_cands.append(feas_cands[best_idx])
+                select_acq_vals.append(feas_acq_vals[best_idx])
+        batch_candidates = torch.stack(select_cands)
+        batch_acq_values = torch.stack(select_acq_vals)
+
+        if return_best_only:
+            best_idx = batch_acq_values.argmax(0)
+            batch_candidates = batch_candidates[best_idx]
+            batch_acq_values = batch_acq_values[best_idx]
 
     if post_processing_func is not None:
         batch_candidates = post_processing_func(batch_candidates)
-
-    if return_best_only:
-        best = torch.argmax(batch_acq_values, dim=0)
-        batch_candidates = batch_candidates[best]
-        batch_acq_values = batch_acq_values[best]
 
     if isinstance(acq_function, OneShotAcquisitionFunction):
         if not kwargs.get("return_full_tree", False):
             batch_candidates = acq_function.extract_candidates(X_full=batch_candidates)
 
     return batch_candidates, batch_acq_values
+
+
+    # # final evaluation
+    # with torch.no_grad():
+    #     flat_cands = batch_candidates.flatten(0, -3)
+    #     flat_acq_vals = torch.cat([
+    #         acq_function(cand_batch) for cand_batch in flat_cands.split(batch_limit)
+    #     ])
+
+    # # check bounds
+    # try:
+    #     # in bounds elementwise?
+    #     in_bounds = (flat_cands >= bounds[0]).prod(-1) * (flat_cands <= bounds[1]).prod(-1)
+    #     # in bounds batchwise?
+    #     in_bounds = in_bounds.prod(-1).bool()
+    #     batch_candidates = flat_cands[in_bounds]
+    #     batch_acq_values = flat_acq_vals[in_bounds]
+    # # if none feasible, use initial solutions
+    # except:
+    #     print('all SGLD iterates out of bounds, reverting to initial conditions')
+    #     batch_candidates = batch_initial_conditions.flatten(0, -3)
+    #     batch_acq_values = torch.cat([
+    #         acq_function(cand_batch) for cand_batch in batch_candidates.split(batch_limit)
+    #     ])
+
+    # if post_processing_func is not None:
+    #     batch_candidates = post_processing_func(batch_candidates)
+
+    # if return_best_only:
+    #     best = torch.argmax(batch_acq_values, dim=0)
+    #     batch_candidates = batch_candidates[best]
+    #     batch_acq_values = batch_acq_values[best]
+
+    # if isinstance(acq_function, OneShotAcquisitionFunction):
+    #     if not kwargs.get("return_full_tree", False):
+    #         batch_candidates = acq_function.extract_candidates(X_full=batch_candidates)
+
+    # return batch_candidates, batch_acq_values
 
 
 def optimize_acqf_sgld_list(

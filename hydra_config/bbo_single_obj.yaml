@@ -26,13 +26,6 @@ opt_params:
   lr: 1e-3  # SGLD learning rate
   sgld_steps: 256
 
-dr_estimator:
-  lr: 1e-3
-  weight_decay: 1e-4
-  num_grad_steps: 256
-  noise_aug_scale: 0.
-  ema_weight: 1e-2
-
 dtype: float
 seed: 0
 trial_id: ${seed}

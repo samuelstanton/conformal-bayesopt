@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=tabular_bandits
+#SBATCH --job-name=conf-bo
 #SBATCH --open-mode=append
 #SBATCH --output=/scratch/ss13641/code/remote/conformal-bayesopt/experiments/tabular/output/%x_%j.out
 #SBATCH --error=/scratch/ss13641/code/remote/conformal-bayesopt/experiments/tabular/error/%x_%j.err
@@ -16,9 +16,7 @@ source /ext3/env.sh
 export PATH=/ext3/miniconda3/envs/conf-bo-env/bin:${PATH}
 conda activate conf-bo-env
 
-cd /home/ss13641/code/remote/conformal-bayesopt/experiments/tabular/
+cd /home/ss13641/code/remote/conformal-bayesopt
 
-wandb agent samuelstanton/conformal-bayesopt/y9umrkt9
+wandb agent samuelstanton/conformal-bayesopt/9myb7cd0
 "
-
-# bash ./slurm/split_jobs.sh $SLURM_ARRAY_TASK_ID $SLURM_JOB_NAME

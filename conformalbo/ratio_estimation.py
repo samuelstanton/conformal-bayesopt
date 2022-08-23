@@ -1,12 +1,8 @@
 import numpy as np
 import torch
-import math
 import copy
 
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-
-from torch import Tensor, nn
-
+from torch import nn
 
 from conformalbo.utils import DataSplit, update_splits, safe_np_cat
 

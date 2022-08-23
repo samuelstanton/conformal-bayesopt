@@ -87,15 +87,15 @@ def bbo_single_obj(cfg, dtype, device):
     bb_fn = hydra.utils.instantiate(cfg.task)
     bb_fn = bb_fn.to(device, dtype)
     # we manually optimize in [0,1]^d
-    bounds = torch.zeros_like(bb_fn.bounds)
-    bounds[1] += 1.
+    opt_bounds = torch.zeros_like(bb_fn.bounds)
+    opt_bounds[1] += 1.
     task_name = cfg.task._target_.split('.')[-1]
-    print(f"obj. function: {task_name}, x bounds: {bounds}")
+    print(f"obj. function: {task_name}, x bounds: {opt_bounds}")
 
     # initialize noise se
     problem_noise_se = initialize_noise_se(bb_fn, cfg.noise_se, device=device, dtype=dtype)
     (
-        all_inputs,
+        all_X,
         all_outcomes,
         best_actual_obj,
     ) = generate_initial_data(cfg.num_init, bb_fn, problem_noise_se, device, dtype,
@@ -103,7 +103,7 @@ def bbo_single_obj(cfg, dtype, device):
     )
 
     optimize_acqf_kwargs = {
-        "bounds": bounds,
+        "bounds": opt_bounds,
         "BATCH_SIZE": cfg.q_batch_size,
         "fn": bb_fn,
         "noise_se": problem_noise_se,
@@ -118,6 +118,7 @@ def bbo_single_obj(cfg, dtype, device):
 
     perf_metrics = dict(
         best_f=best_actual_obj,
+        num_baseline=cfg.num_init,
     )
     wandb.log(perf_metrics, step=0)
 
@@ -127,14 +128,14 @@ def bbo_single_obj(cfg, dtype, device):
             torch.cuda.memory_reserved() / 1024**3
         )
 
-        train_inputs, holdout_inputs, train_outcomes, holdout_outcomes = train_test_split(
-            all_inputs, all_outcomes, test_size=cfg.holdout_frac
+        train_X, holdout_X, train_outcomes, holdout_outcomes = train_test_split(
+            all_X, all_outcomes, test_size=cfg.holdout_frac
         )
 
         # transform data for inference
-        input_transform = transforms.input.Normalize(train_inputs.shape[-1])
+        # input_transform = transforms.input.Normalize(train_inputs.shape[-1])
         outcome_transform = transforms.outcome.Standardize(train_outcomes.shape[-1])
-        train_X, holdout_X = fit_and_transform(input_transform, train_inputs, holdout_inputs)
+        # train_X, holdout_X = fit_and_transform(input_transform, train_inputs, holdout_inputs)
         (train_Y, _), (holdout_Y, _) = fit_and_transform(outcome_transform, train_outcomes, holdout_outcomes)
         surrogate = fit_surrogate(train_X, train_Y)
         set_alpha(cfg, train_X.shape[-2])
@@ -146,15 +147,15 @@ def bbo_single_obj(cfg, dtype, device):
         del surrogate
         torch.cuda.empty_cache()
 
-        train_X = fit_and_transform(input_transform, all_inputs)
-        train_Y, _ = fit_and_transform(outcome_transform, all_outcomes)
-        surrogate = fit_surrogate(train_X, train_Y)
+        # train_X = fit_and_transform(input_transform, all_inputs)
+        all_Y, _ = fit_and_transform(outcome_transform, all_outcomes)
+        surrogate = fit_surrogate(all_X, all_Y)
         set_alpha(cfg, train_X.shape[-2])
         set_beta(cfg)
 
-        dr_estimator = RatioEstimator(all_inputs.size(-1), device, dtype)
+        dr_estimator = RatioEstimator(all_X.size(-1), device, dtype)
         dr_estimator.dataset._update_splits(
-            DataSplit(all_inputs.cpu(), torch.zeros(all_inputs.size(0), 1))
+            DataSplit(all_X.cpu(), torch.zeros(all_X.size(0), 1))
         )
 
         acq_name = cfg.acquisition._target_.split('.')[-1]
@@ -168,31 +169,32 @@ def bbo_single_obj(cfg, dtype, device):
             )
 
         if cfg.use_turbo_bounds:
-            raw_bounds = get_tr_bounds(all_inputs, all_outcomes, surrogate, opt_global_state)
-            optimize_acqf_kwargs["bounds"] = input_transform(raw_bounds)
-        else:
-            optimize_acqf_kwargs["bounds"] = bounds
+            opt_bounds = get_tr_bounds(all_X, all_outcomes, surrogate, opt_global_state)
+        optimize_acqf_kwargs["bounds"] = opt_bounds
 
         # optimize acquisition
         if 'Conformal' in acq_name:
             opt_acqf_kwargs = {**optimize_acqf_kwargs, **cfg.opt_params}
         else:
             opt_acqf_kwargs = optimize_acqf_kwargs
-        new_x, new_y, new_f, new_a, all_x, all_y = optimize_acqf_and_get_observation(
+        query_X, query_outcomes, query_f, query_a, cand_X, cand_outcomes = optimize_acqf_and_get_observation(
                 acq_fn, **opt_acqf_kwargs
             )
         opt_metrics = dict(
             best_f=max(
                 perf_metrics['best_f'],
-                new_f.max().item(),
+                query_f.max().item(),
             ),
-            acq_val=new_a.item(),
+            acq_val=query_a.item(),
+            num_baseline=perf_metrics['num_baseline'] + cfg.q_batch_size
         )
         perf_metrics.update(opt_metrics)
+        # import pdb; pdb.set_trace()
 
-        query_X = new_x
-        query_Y, _ = outcome_transform(new_y)
-        query_metrics = evaluate_surrogate(cfg, surrogate, query_X, query_Y, dr_estimator, log_prefix='query')
+        cand_Y, _ = outcome_transform(cand_outcomes)
+        query_metrics = evaluate_surrogate(
+            cfg, surrogate, cand_X.flatten(0, -2), cand_Y.flatten(0, -2), dr_estimator, log_prefix='query'
+        )
         perf_metrics.update(query_metrics)
 
         display_metrics(opt_metrics)
@@ -203,11 +205,11 @@ def bbo_single_obj(cfg, dtype, device):
         torch.cuda.empty_cache()
 
         if cfg.use_turbo_bounds:
-            opt_global_state = update_state(opt_global_state, new_y)
+            opt_global_state = update_state(opt_global_state, query_outcomes)
 
         # update dataset
-        all_inputs = torch.cat([all_inputs, new_x])
-        all_outcomes = torch.cat([all_outcomes, new_y])
+        all_X = torch.cat([all_X, query_X])
+        all_outcomes = torch.cat([all_outcomes, query_outcomes])
 
         wandb.log(perf_metrics, step=q_batch_idx)
 
