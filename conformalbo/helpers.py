@@ -11,8 +11,6 @@ from gpytorch import lazify
 from botorch.sampling import IIDNormalSampler
 from botorch.posteriors import GPyTorchPosterior
 
-import torchsort
-
 
 def conf_mask_to_bounds(target_grid, conf_pred_mask):
     """

@@ -30,8 +30,8 @@ project_name: conformal-bayesopt
 version: v0.0.6
 
 # Directories for loading and storing data
-data_dir: ./experiments/tabular/data
-exp_name: test_tabular
+data_dir: ./data
+exp_name: test_tab_bandits
 job_name: null
 timestamp: ${now:%Y-%m-%d_%H-%M-%S}
 log_dir: ${data_dir}/${exp_name}/${job_name}/${timestamp}

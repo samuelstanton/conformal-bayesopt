@@ -1,11 +1,18 @@
 import torch
 import argparse
 import numpy as np
+import math
+import pandas as pd
+
+from collections.__init__ import namedtuple
+
+from scipy.stats import norm, spearmanr
 
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.constraints import Interval
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
+from botorch import fit_gpytorch_model
 from botorch.models.transforms import Standardize, Normalize
 from botorch.models import SingleTaskGP
 from botorch.test_functions import Branin, Levy, Ackley, Michalewicz
@@ -17,10 +24,8 @@ from botorch.test_functions.multi_objective import (
 )
 from botorch.optim.optimize import optimize_acqf, optimize_acqf_list
 
-try:
-    from ratio_estimation import optimize_acqf_sgld, optimize_acqf_sgld_list
-except ImportError:
-    from conformalbo.ratio_estimation import optimize_acqf_sgld, optimize_acqf_sgld_list
+from conformalbo.optim.optimize import optimize_acqf_sgld, optimize_acqf_sgld_list
+from conformalbo.helpers import assess_coverage
 
 
 def parse():
@@ -276,3 +281,148 @@ def optimize_acqf_and_get_observation(
     # print(f"x*: {best_x}")
 
     return best_x, best_y, best_f, best_a, all_x, all_y
+
+
+fields = ("inputs", "targets")
+defaults = (np.array([]), np.array([]))
+DataSplit = namedtuple("DataSplit", fields, defaults=defaults)
+
+
+def update_splits(
+    train_split: DataSplit,
+    val_split: DataSplit,
+    test_split: DataSplit,
+    new_split: DataSplit,
+    holdout_ratio: float = 0.2,
+):
+    r"""
+    This utility function updates train, validation and test data splits with
+    new observations while preventing leakage from train back to val or test.
+    New observations are allocated proportionally to prevent the
+    distribution of the splits from drifting apart.
+
+    New rows are added to the validation and test splits randomly according to
+    a binomial distribution determined by the holdout ratio. This allows all splits
+    to be updated with as few new points as desired. In the long run the split proportions
+    will converge to the correct values.
+    """
+    train_inputs, train_targets = train_split
+    val_inputs, val_targets = val_split
+    test_inputs, test_targets = test_split
+
+    # shuffle new data
+    new_inputs, new_targets = new_split
+    new_perm = np.random.permutation(
+        np.arange(new_inputs.shape[0])
+    )
+    new_inputs = new_inputs[new_perm]
+    new_targets = new_targets[new_perm]
+
+    unseen_inputs = safe_np_cat([test_inputs, new_inputs])
+    unseen_targets = safe_np_cat([test_targets, new_targets])
+
+    num_rows = train_inputs.shape[0] + val_inputs.shape[0] + unseen_inputs.shape[0]
+    num_test = min(
+        np.random.binomial(num_rows, holdout_ratio / 2.),
+        unseen_inputs.shape[0],
+    )
+    num_test = max(test_inputs.shape[0], num_test) if test_inputs.size else max(1, num_test)
+
+    # first allocate to test split
+    test_split = DataSplit(unseen_inputs[:num_test], unseen_targets[:num_test])
+
+    resid_inputs = unseen_inputs[num_test:]
+    resid_targets = unseen_targets[num_test:]
+    resid_inputs = safe_np_cat([val_inputs, resid_inputs])
+    resid_targets = safe_np_cat([val_targets, resid_targets])
+
+    # then allocate to val split
+    num_val = min(
+        np.random.binomial(num_rows, holdout_ratio / 2.),
+        resid_inputs.shape[0],
+    )
+    num_val = max(val_inputs.shape[0], num_val) if val_inputs.size else max(1, num_val)
+    val_split = DataSplit(resid_inputs[:num_val], resid_targets[:num_val])
+
+    # train split gets whatever is left
+    last_inputs = resid_inputs[num_val:]
+    last_targets = resid_targets[num_val:]
+    train_inputs = safe_np_cat([train_inputs, last_inputs])
+    train_targets = safe_np_cat([train_targets, last_targets])
+    train_split = DataSplit(train_inputs, train_targets)
+
+    return train_split, val_split, test_split
+
+
+def safe_np_cat(arrays, **kwargs):
+    if all([arr.size == 0 for arr in arrays]):
+        return np.array([])
+    cat_arrays = [arr for arr in arrays if arr.size]
+    return np.concatenate(cat_arrays, **kwargs)
+
+
+def fit_and_transform(transform, train_arr, holdout_arr=None):
+    transform.train()
+    train_result = transform(train_arr)
+    transform.eval()
+    if holdout_arr is None:
+        return train_result
+    return train_result, transform(holdout_arr)
+
+
+def fit_surrogate(train_X, train_Y):
+    surrogate = SingleTaskGP(train_X=train_X, train_Y=train_Y)
+    surrogate_mll = ExactMarginalLogLikelihood(surrogate.likelihood, surrogate)
+    surrogate.train()
+    surrogate.requires_grad_(True)
+    fit_gpytorch_model(surrogate_mll)
+    surrogate.requires_grad_(False)
+    surrogate.eval()
+    return surrogate
+
+
+def set_alpha(cfg, num_train):
+    alpha = 1 / math.sqrt(num_train)
+    cfg.conformal_params['alpha'] = alpha
+    return alpha
+
+
+def set_beta(cfg):
+    beta = norm.ppf(1 - cfg.conformal_params.alpha / 2.).item()
+    # import pdb; pdb.set_trace()
+    if 'beta' in cfg.acquisition:
+        cfg.acquisition.beta = beta
+    return beta
+
+
+def display_metrics(metrics):
+    df = pd.DataFrame((metrics,)).round(4)
+    print(df.to_markdown())
+
+
+def evaluate_surrogate(cfg, surrogate, holdout_X, holdout_Y, dr_estimator=None, log_prefix=''):
+    eval_metrics = {}
+    # p(y | x, D)
+    y_post = surrogate.posterior(holdout_X, observation_noise=True)
+    # NLL, RMSE, and Spearman's Rho
+    eval_metrics['nll'] = -1 * torch.distributions.Normal(y_post.mean, y_post.variance.sqrt()).log_prob(holdout_Y).mean().item()
+    eval_metrics["rmse"] = (y_post.mean - holdout_Y).pow(2).mean().sqrt().item()
+    try:
+        s_rho = np.stack([
+            spearmanr(
+                holdout_Y[:, idx], y_post.mean[:, idx]
+            ).correlation for idx in range(holdout_Y.shape[-1])
+        ]).mean().item()
+    except Exception:
+        s_rho = float('NaN')
+    eval_metrics["s_rho"] = s_rho
+    # credible and conformal coverage
+    eval_metrics["exp_cvrg"] = 1 - cfg.conformal_params.alpha
+    eval_metrics["cred_cvrg"], eval_metrics["conf_cvrg"] = assess_coverage(
+        surrogate, holdout_X, holdout_Y, ratio_estimator=dr_estimator, **cfg.conformal_params
+    )
+    # add log prefix
+    if len(log_prefix) > 0:
+        eval_metrics = {'_'.join([log_prefix, key]): val for key, val in eval_metrics.items()}
+    display_metrics(eval_metrics)
+    return eval_metrics

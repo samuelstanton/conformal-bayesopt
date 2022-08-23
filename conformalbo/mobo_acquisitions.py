@@ -16,9 +16,9 @@ from botorch.acquisition.multi_objective import (
    qNoisyExpectedHypervolumeImprovement,
 )
 
-from helpers import construct_conformal_bands
+from conformalbo.helpers import construct_conformal_bands
+from conformalbo.acquisitions import ConformalAcquisition, _conformal_integration
 
-from acquisitions import ConformalAcquisition, _conformal_integration
 
 class qConformalExpectedHypervolumeImprovement(ConformalAcquisition, qExpectedHypervolumeImprovement):
     def __init__(self, alpha, temp, grid_res, max_grid_refinements, ratio_estimator,

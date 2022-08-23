@@ -1,8 +1,0 @@
-_target_: lambo.optimizers.pymoo.ModelFreeGeneticOptimizer
-_recursive_: False
-num_rounds: 32
-num_gens: 2
-seed: ${seed}
-concentrate_pool: 1
-residue_sampler: uniform
-resampling_weight: 1.

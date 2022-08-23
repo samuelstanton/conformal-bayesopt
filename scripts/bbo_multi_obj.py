@@ -18,16 +18,14 @@ from botorch.utils.sampling import sample_simplex
 from botorch.utils.multi_objective.scalarization import get_chebyshev_scalarization
 from botorch.acquisition.objective import GenericMCObjective
 
-import sys
-sys.path.append("../../conformalbo/")
-from helpers import assess_coverage
-from acquisitions import qConformalNoisyExpectedImprovement
-from mobo_acquisitions import (
+from conformalbo.helpers import assess_coverage
+from conformalbo.acquisitions import qConformalNoisyExpectedImprovement
+from conformalbo.mobo_acquisitions import (
     qConformalNoisyExpectedHypervolumeImprovement,
     qConformalExpectedHypervolumeImprovement,
 )
-from ratio_estimation import RatioEstimator
-from utils import (
+from conformalbo.ratio_estimation import RatioEstimator
+from conformalbo.utils import (
     generate_initial_data,
     initialize_model,
     parse,
@@ -35,9 +33,9 @@ from utils import (
     update_random_observations,
     get_problem,
     initialize_noise_se,
+    DataSplit,
+    update_splits,
 )
-sys.path.append("../../")
-from lambo.utils import DataSplit, update_splits
 
 
 def main(

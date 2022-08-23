@@ -1,0 +1,59 @@
+defaults:
+ - task: levy
+ - acquisition: cucb
+
+noise_se: 0.1
+num_init: 8
+rand_orthant: true
+
+q_batch_size: 3
+num_q_batches: 4
+num_samples: 64
+
+use_turbo_bounds: false
+
+holdout_frac: 0.2
+
+conformal_params:
+  alpha: null
+  grid_res: ${num_samples}
+  max_grid_refinements: 0
+  temp: 1e-2
+  randomized: true
+
+opt_params:
+  temperature: 1e-3  # SGLD temperature
+  lr: 1e-3  # SGLD learning rate
+  sgld_steps: 256
+
+dr_estimator:
+  lr: 1e-3
+  weight_decay: 1e-4
+  num_grad_steps: 256
+  noise_aug_scale: 0.
+  ema_weight: 1e-2
+
+dtype: float
+seed: 0
+trial_id: ${seed}
+project_name: conformal-bayesopt
+version: v0.0.6
+
+# Directories for loading and storing data
+data_dir: ./data
+exp_name: test_bbo_single_obj
+job_name: null
+timestamp: ${now:%Y-%m-%d_%H-%M-%S}
+log_dir: ${data_dir}/${exp_name}/${job_name}/${timestamp}
+wandb_mode: online
+
+logger:
+  _target_: upcycle.logging.DataFrameLogger
+  log_dir: ${log_dir}
+
+hydra:
+  run:
+    dir: ./
+  sweep:
+    dir: ./
+    subdir: ./

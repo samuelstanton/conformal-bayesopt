@@ -2,26 +2,23 @@ import matplotlib.pyplot as plt
 import torch
 import botorch
 import gpytorch
+import argparse
+import math
 
 from botorch.models import HeteroskedasticSingleTaskGP
 from botorch.optim.fit import fit_gpytorch_scipy
 from botorch.acquisition.monte_carlo import qUpperConfidenceBound, qExpectedImprovement
-from gpytorch.mlls import ExactMarginalLogLikelihood
-
 from botorch.acquisition.penalized import PenalizedAcquisitionFunction
 from botorch.optim.optimize import optimize_acqf
-
-import math
-
-import sys
-sys.path.append("..")
-from conformalbo.acquisitions import qConformalExpectedImprovement, qConformalUpperConfidenceBound
 from botorch.sampling import IIDNormalSampler
-from conformalbo.ratio_estimation import RatioEstimator, optimize_acqf_sgld
 from botorch.models import SingleTaskGP
-from lambo.utils import DataSplit, update_splits
 
-import argparse
+from gpytorch.mlls import ExactMarginalLogLikelihood
+
+from conformalbo.acquisitions import qConformalExpectedImprovement, qConformalUpperConfidenceBound
+from conformalbo.ratio_estimation import RatioEstimator, optimize_acqf_sgld
+from conformalbo.utils import DataSplit, update_splits
+
 
 class Sinc:
     bounds = torch.tensor([[-10, 10.]])

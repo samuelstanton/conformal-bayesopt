@@ -26,20 +26,16 @@ from botorch.sampling import IIDNormalSampler
 from upcycle.scripting import startup
 from upcycle.logging.analysis import flatten_config
 
-# TODO proper packaging
-import sys
-sys.path.append("../../conformalbo/")
-from helpers import assess_coverage
-from acquisitions import qConformalUpperConfidenceBound
-from ratio_estimation import RatioEstimator
+from conformalbo.helpers import assess_coverage
+from conformalbo.acquisitions import qConformalUpperConfidenceBound
+from conformalbo.ratio_estimation import RatioEstimator
 
 
-@hydra.main(config_path='./hydra_config', config_name='tabular_search')
+@hydra.main(config_path='./hydra_config', config_name='tab_bandits')
 def main(cfg):
     # setup
     random.seed(None)  # make sure random seed resets between multirun jobs for random job-name generation
     log_cfg = flatten_config(OmegaConf.to_container(cfg, resolve=True), sep='/')
-    # log_config = {'/'.join(('config', key)): val for key, val in log_config.items()}
     wandb.init(project=cfg.project_name, config=log_cfg, mode=cfg.wandb_mode,
                group=cfg.exp_name)
     cfg['job_name'] = wandb.run.name
