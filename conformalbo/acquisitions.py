@@ -70,8 +70,7 @@ class ConformalAcquisition(object):
         values = self._nonconformal_fwd(reshaped_x, conditioned_model)
         # integrate w.r.t. batch outcome
         res = _conformal_integration(values, conf_pred_mask, grid_logp, self.alpha, opt_mask, ood_mask)
-
-        return res.view(*orig_batch_shape)
+        return res
 
     def forward(self, X):
         res = self._conformal_fwd(X)
@@ -80,11 +79,11 @@ class ConformalAcquisition(object):
 
 class qConformalExpectedImprovement(ConformalAcquisition, qExpectedImprovement):
     def __init__(self, alpha, temp, grid_res, max_grid_refinements, ratio_estimator,
-                 optimistic=False, grid_sampler=None, *args, **kwargs):
+                 optimistic=False, grid_sampler=None, randomized=False, *args, **kwargs):
         qExpectedImprovement.__init__(self, *args, **kwargs)
         ConformalAcquisition.__init__(
             self, alpha, temp, grid_res, max_grid_refinements, ratio_estimator,
-            optimistic, grid_sampler
+            optimistic, grid_sampler, randomized
         )
 
     def _nonconformal_fwd(self, X, conditioned_model):
@@ -105,11 +104,11 @@ class qConformalExpectedImprovement(ConformalAcquisition, qExpectedImprovement):
 
 class qConformalNoisyExpectedImprovement(ConformalAcquisition, qNoisyExpectedImprovement):
     def __init__(self, alpha, temp, grid_res, max_grid_refinements, ratio_estimator,
-                 optimistic=False, grid_sampler=None, *args, **kwargs):
+                 optimistic=False, grid_sampler=None, randomized=False, *args, **kwargs):
         qNoisyExpectedImprovement.__init__(self, *args, **kwargs)
         ConformalAcquisition.__init__(
             self, alpha, temp, grid_res, max_grid_refinements, ratio_estimator,
-            optimistic, grid_sampler
+            optimistic, grid_sampler, randomized
         )
 
     def _nonconformal_fwd(self, X, conditioned_model):
@@ -223,9 +222,15 @@ def _conformal_integration(values, conf_pred_mask, grid_logp, alpha, opt_mask, o
     """
     integrate w.r.t. outcome variables
     """
-    opt_mask = opt_mask.prod(-1, keepdim=True)
-    conf_pred_mask = conf_pred_mask.prod(-1, keepdim=True)
-    ood_mask = ood_mask.prod(-1, keepdim=True)
+    # some acquisition values have a batch dimension, others do not
+    collapse_dims = [i for i in range(values.ndim, conf_pred_mask.ndim)]
+    for i in reversed(collapse_dims):
+        opt_mask = opt_mask.prod(i)
+        conf_pred_mask = conf_pred_mask.prod(i)
+        ood_mask = ood_mask.prod(i)
+        grid_logp = grid_logp.sum(i)
+
+    sum_dim = -3 + len(collapse_dims)
 
     # combined_mask = conf_pred_mask * opt_mask
 
@@ -250,13 +255,14 @@ def _conformal_integration(values, conf_pred_mask, grid_logp, alpha, opt_mask, o
     # conf_weights = (1. - alpha) * conf_pred_mask * conf_weights
 
     nonconf_weights = (1. - conf_pred_mask) * opt_mask
-    nonconf_weights = nonconf_weights / nonconf_weights.sum(-3, keepdim=True).clamp_min(1e-6)
+    nonconf_weights = nonconf_weights / nonconf_weights.sum(sum_dim, keepdim=True).clamp_min(1e-6)
 
     conf_weights = (conf_pred_mask * opt_mask) / grid_logp.exp().clamp_min(1e-6)
-    conf_weights = conf_weights / conf_weights.sum(-3, keepdim=True).clamp_min(1e-6)
+    conf_weights = conf_weights / conf_weights.sum(sum_dim, keepdim=True).clamp_min(1e-6)
 
     combined_weights = (1. - alpha) * conf_weights + alpha * nonconf_weights
-    values = ((1. - ood_mask) * combined_weights * values[..., None]).sum(-3)
+    values = ((1. - ood_mask) * combined_weights * values).sum(sum_dim)
+
     return values
 
 

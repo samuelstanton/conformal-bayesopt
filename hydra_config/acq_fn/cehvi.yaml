@@ -1,0 +1,10 @@
+obj:
+  _target_: conformalbo.mobo_acquisitions.qConformalExpectedHypervolumeImprovement
+  eta: 1e-3
+  sampler:
+    _target_: botorch.sampling.samplers.IIDNormalSampler
+    num_samples: 1
+    batch_range: [0, -3]
+params:
+  - ref_point
+  - partitioning

@@ -327,6 +327,7 @@ def conformal_gp_regression(
     # reshape to (*q_batch_shape, grid_size, q_batch_size, target_dim)
     conf_pred_mask = conf_pred_mask.transpose(-1, -2)
     conf_scores = conf_scores.transpose(-1, -2)
+    ood_mask = ood_mask.transpose(-1, -2)
     q_conf_scores = conf_scores[..., num_old_train:, :].detach()
 
     return conf_pred_mask, updated_gps, q_conf_scores, ood_mask

@@ -152,6 +152,7 @@ def bbo_single_obj(cfg, dtype, device):
 
     perf_metrics = dict(num_baseline=cfg.num_init)
     perf_metrics.update(get_opt_metrics(bb_fn, all_X))
+    display_metrics(perf_metrics)
     wandb.log(perf_metrics, step=0)
 
     for q_batch_idx in range(1, cfg.num_q_batches + 1):
