@@ -30,11 +30,11 @@ dtype: float
 seed: 0
 trial_id: ${seed}
 project_name: conformal-bayesopt
-version: v0.0.6
+version: v0.0.7
 
 # Directories for loading and storing data
 data_dir: ./data
-exp_name: test_bbo_single_obj
+exp_name: test_bbo
 job_name: null
 timestamp: ${now:%Y-%m-%d_%H-%M-%S}
 log_dir: ${data_dir}/${exp_name}/${job_name}/${timestamp}

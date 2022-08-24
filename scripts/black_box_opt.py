@@ -57,7 +57,7 @@ from conformalbo.utils import (
 )
 
 
-@hydra.main(config_path='../hydra_config', config_name='bbo_single_obj')
+@hydra.main(config_path='../hydra_config', config_name='black_box_opt')
 def main(cfg):
     # setup
     random.seed(None)  # make sure random seed resets between multirun jobs for random job-name generation
@@ -74,7 +74,7 @@ def main(cfg):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            ret_val = bbo_single_obj(cfg, dtype, device)
+            ret_val = black_box_opt(cfg, dtype, device)
     except Exception as err:
         ret_val = float('NaN')
         logging.exception(err)
@@ -115,7 +115,7 @@ def construct_acq_fn(cfg, bb_fn, surrogate, baseline_X, baseline_Y, outcome_tran
     return hydra.utils.instantiate(cfg.acq_fn.obj, **params)
 
 
-def bbo_single_obj(cfg, dtype, device):
+def black_box_opt(cfg, dtype, device):
     
     # set up black-box obj. fn.
     bb_fn = hydra.utils.instantiate(cfg.task)
@@ -243,6 +243,11 @@ def bbo_single_obj(cfg, dtype, device):
         torch.cuda.empty_cache()
 
         wandb.log(perf_metrics, step=q_batch_idx)
+
+    f_best = perf_metrics.get('f_best', None)
+    f_hypervol = perf_metrics.get('f_hypervol', None)
+    ret_val = f_hypervol if f_best is None else f_best
+    return ret_val
 
 
 # def main(
