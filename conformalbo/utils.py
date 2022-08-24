@@ -387,12 +387,11 @@ def set_alpha(cfg, num_train):
     return alpha
 
 
-def set_beta(cfg):
-    beta = norm.ppf(1 - cfg.conformal_params.alpha / 2.).item()
-    # import pdb; pdb.set_trace()
-    if 'beta' in cfg.acquisition:
-        cfg.acquisition.beta = beta
-    return beta
+# def set_beta(cfg):
+#     beta = norm.ppf(1 - cfg.conformal_params.alpha / 2.).item()
+#     if 'beta' in cfg.acq_fn:
+#         cfg.acq_fn.beta = beta
+#     return beta
 
 
 def display_metrics(metrics):

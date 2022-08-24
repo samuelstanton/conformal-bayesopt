@@ -1,7 +1,0 @@
-_target_: conformalbo.acquisitions.qConformalUpperConfidenceBound
-optimistic: true
-beta: null
-sampler:
-  _target_: botorch.sampling.samplers.IIDNormalSampler
-  num_samples: 1
-  batch_range: [0, -3]

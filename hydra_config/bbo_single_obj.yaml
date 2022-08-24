@@ -1,13 +1,13 @@
 defaults:
  - task: levy
- - acquisition: cucb
+ - acq_fn: cucb
 
 noise_se: 0.1
-num_init: 8
+num_init: 10
 rand_orthant: true
 
 q_batch_size: 3
-num_q_batches: 4
+num_q_batches: 50
 num_samples: 64
 
 use_turbo_bounds: false

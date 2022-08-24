@@ -1,0 +1,2 @@
+_target_: botorch.test_functions.multi_objective.BraninCurrin
+negate: true

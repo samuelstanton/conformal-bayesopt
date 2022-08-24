@@ -1,0 +1,8 @@
+obj:
+  _target_: botorch.acquisition.monte_carlo.qExpectedImprovement
+  sampler:
+    _target_: botorch.sampling.samplers.IIDNormalSampler
+    num_samples: ${num_samples}
+    batch_range: [0, -2]
+params:
+  - best_f

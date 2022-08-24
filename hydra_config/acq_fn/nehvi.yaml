@@ -1,0 +1,12 @@
+obj:
+  _target_: botorch.acquisition.multi_objective.qNoisyExpectedHypervolumeImprovement
+  eta: 1e-3
+  alpha: 0.
+  prune_baseline: true
+  sampler:
+    _target_: botorch.sampling.samplers.IIDNormalSampler
+    num_samples: ${num_samples}
+    batch_range: [0, -2]
+params:
+  - ref_point
+  - X_baseline

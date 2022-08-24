@@ -1,0 +1,10 @@
+obj:
+  _target_: botorch.acquisition.multi_objective.qExpectedHypervolumeImprovement
+  eta: 1e-3
+  sampler:
+    _target_: botorch.sampling.samplers.IIDNormalSampler
+    num_samples: ${num_samples}
+    batch_range: [0, -2]
+params:
+  - ref_point
+  - partitioning

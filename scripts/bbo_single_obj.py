@@ -27,9 +27,11 @@ from botorch.acquisition.objective import IdentityMCObjective
 from botorch import fit_gpytorch_model
 from botorch.sampling.samplers import IIDNormalSampler
 from botorch.models import transforms
+from botorch.utils.multi_objective.box_decompositions.non_dominated import FastNondominatedPartitioning
 
 from conformalbo.helpers import assess_coverage
 from conformalbo.acquisitions import (
+    ConformalAcquisition,
     qConformalExpectedImprovement,
     qConformalNoisyExpectedImprovement,
     qConformalUpperConfidenceBound,
@@ -43,7 +45,7 @@ from conformalbo.utils import (
     initialize_model,
     parse,
     optimize_acqf_and_get_observation,
-    set_beta,
+    # set_beta,
     update_random_observations,
     initialize_noise_se,
     DataSplit,
@@ -81,6 +83,38 @@ def main(cfg):
     return ret_val
 
 
+def get_opt_metrics(bb_fn, baseline_X):
+    metrics = {}
+    baseline_inputs = baseline_X * (bb_fn.bounds[1] - bb_fn.bounds[0]) + bb_fn.bounds[0]
+    baseline_f = bb_fn(baseline_inputs).view(*baseline_inputs.shape[:-1], -1)
+    if baseline_f.shape[-1] == 1:
+        metrics['f_best'] = baseline_f.max().item()
+    else:
+        box_decomp = FastNondominatedPartitioning(bb_fn.ref_point, baseline_f)
+        metrics['f_hypervol'] = box_decomp.compute_hypervolume().item()
+    return metrics
+
+
+def construct_acq_fn(cfg, bb_fn, surrogate, baseline_X, baseline_Y, outcome_transform, ratio_estimator):
+    params = dict(model=surrogate)
+    if "X_baseline" in cfg.acq_fn.params:
+        params['X_baseline'] = baseline_X
+    if 'best_f' in cfg.acq_fn.params:
+        params['best_f'] = baseline_Y.max()
+    if 'beta' in cfg.acq_fn.params:
+        beta = norm.ppf(1 - cfg.conformal_params.alpha / 2.).item()
+        params['beta'] = beta
+    if 'ref_point' in cfg.acq_fn.params:
+        params['ref_point'] = outcome_transform(bb_fn.ref_point)[0].view(-1)
+    if 'partitioning' in cfg.acq_fn.params:
+        ref_point = outcome_transform(bb_fn.ref_point)[0].view(-1)
+        params['partitioning'] = FastNondominatedPartitioning(ref_point, baseline_Y)
+    if 'Conformal' in cfg.acq_fn.obj._target_:
+        params.update(cfg.conformal_params)
+        params['ratio_estimator'] = ratio_estimator
+    return hydra.utils.instantiate(cfg.acq_fn.obj, **params)
+
+
 def bbo_single_obj(cfg, dtype, device):
     
     # set up black-box obj. fn.
@@ -110,16 +144,14 @@ def bbo_single_obj(cfg, dtype, device):
     }
     opt_global_state = TurboState(
         batch_size=cfg.q_batch_size,
-        dim=cfg.task.dim
+        dim=all_X.shape[-1]
     )
 
     # the implicit amount of noise changes by iteration
     current_noise_se = problem_noise_se
 
-    perf_metrics = dict(
-        best_f=best_actual_obj,
-        num_baseline=cfg.num_init,
-    )
+    perf_metrics = dict(num_baseline=cfg.num_init)
+    perf_metrics.update(get_opt_metrics(bb_fn, all_X))
     wandb.log(perf_metrics, step=0)
 
     for q_batch_idx in range(1, cfg.num_q_batches + 1):
@@ -151,45 +183,50 @@ def bbo_single_obj(cfg, dtype, device):
         all_Y, _ = fit_and_transform(outcome_transform, all_outcomes)
         surrogate = fit_surrogate(all_X, all_Y)
         set_alpha(cfg, train_X.shape[-2])
-        set_beta(cfg)
+        # set_beta(cfg)
 
         dr_estimator = RatioEstimator(all_X.size(-1), device, dtype)
         dr_estimator.dataset._update_splits(
             DataSplit(all_X.cpu(), torch.zeros(all_X.size(0), 1))
         )
 
-        acq_name = cfg.acquisition._target_.split('.')[-1]
-        if 'Conformal' in acq_name:
-            acq_fn = hydra.utils.instantiate(
-                cfg.acquisition, model=surrogate, ratio_estimator=dr_estimator, **cfg.conformal_params
-            )
-        else:
-            acq_fn = hydra.utils.instantiate(
-                cfg.acquisition, model=surrogate
-            )
+        acq_fn = construct_acq_fn(cfg, bb_fn, surrogate, train_X, train_Y, outcome_transform, dr_estimator)
+        # acq_name = cfg.acq_fn._target_.split('.')[-1]
+        # if 'Conformal' in acq_name:
+        #     acq_fn = hydra.utils.instantiate(
+        #         cfg.acq_fn, model=surrogate, ratio_estimator=dr_estimator, **cfg.conformal_params
+        #     )
+        # else:
+        #     acq_fn = hydra.utils.instantiate(
+        #         cfg.acq_fn, model=surrogate
+        #     )
 
         if cfg.use_turbo_bounds:
             opt_bounds = get_tr_bounds(all_X, all_outcomes, surrogate, opt_global_state)
         optimize_acqf_kwargs["bounds"] = opt_bounds
 
         # optimize acquisition
-        if 'Conformal' in acq_name:
+        if isinstance(acq_fn, ConformalAcquisition):
             opt_acqf_kwargs = {**optimize_acqf_kwargs, **cfg.opt_params}
         else:
             opt_acqf_kwargs = optimize_acqf_kwargs
         query_X, query_outcomes, query_f, query_a, cand_X, cand_outcomes = optimize_acqf_and_get_observation(
                 acq_fn, **opt_acqf_kwargs
             )
+
+        # update TuRBO trust region
+        if cfg.use_turbo_bounds:
+            opt_global_state = update_state(opt_global_state, query_outcomes)
+        # update dataset
+        all_X = torch.cat([all_X, query_X])
+        all_outcomes = torch.cat([all_outcomes, query_outcomes])
+
         opt_metrics = dict(
-            best_f=max(
-                perf_metrics['best_f'],
-                query_f.max().item(),
-            ),
             acq_val=query_a.item(),
             num_baseline=perf_metrics['num_baseline'] + cfg.q_batch_size
         )
+        opt_metrics.update(get_opt_metrics(bb_fn, all_X))
         perf_metrics.update(opt_metrics)
-        # import pdb; pdb.set_trace()
 
         cand_Y, _ = outcome_transform(cand_outcomes)
         query_metrics = evaluate_surrogate(
@@ -203,13 +240,6 @@ def bbo_single_obj(cfg, dtype, device):
         surrogate.train()
         del surrogate
         torch.cuda.empty_cache()
-
-        if cfg.use_turbo_bounds:
-            opt_global_state = update_state(opt_global_state, query_outcomes)
-
-        # update dataset
-        all_X = torch.cat([all_X, query_X])
-        all_outcomes = torch.cat([all_outcomes, query_outcomes])
 
         wandb.log(perf_metrics, step=q_batch_idx)
 
