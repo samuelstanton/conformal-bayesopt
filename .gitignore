@@ -2,7 +2,6 @@
 RNAfold
 Dockerfile
 ckpts
-wandb_config
 notebooks/assets
 notebooks/tmp
 lambo/assets/pdb

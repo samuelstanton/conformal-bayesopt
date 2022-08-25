@@ -18,5 +18,5 @@ conda activate conf-bo-env
 
 cd /home/ss13641/code/remote/conformal-bayesopt
 
-wandb agent samuelstanton/conformal-bayesopt/rylvvakp
+wandb agent samuelstanton/conformal-bayesopt/8f1a6x4e
 "

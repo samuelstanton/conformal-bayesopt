@@ -30,46 +30,47 @@ pip install -e .
 ## Reproducing the figures
 
 This project uses [Weight and Biases](https://docs.wandb.ai/) for logging.
+
 The experimental data used to produce the plots in our papers is available [here](https://wandb.ai/samuelstanton/conformal-bayesopt).
 
 
 ## Running the code
 
-#### Single-Objective, Continuous
+#### Single-objective, continuous
 ```bash
 python scripts/black_box_opt.py task=ackley acq_fn=cucb
 ```
 
-#### Multi-Objective, Continuous
+#### Multi-objective, continuous
 ```bash
 python scripts/black_box_opt.py task=branin_currin acq_fn=cehvi
 ```
 
-#### Single-Objective, Tabular
+#### Single-objective, tabular
 ```bash 
 python scripts/tab_bandits.py task=poas_stability acq_fn=cucb
 ```
 
-## Configuration Options
+## Configuration options
 
 See the config files in `./hydra_config` for all configurable parameters.
 Note that any config field can be overridden from the command line, and some configurations are not supported. 
 
 ### Task options
 
-#### Single-Objective, Continuous
+#### Single-objective, continuous
 - `ackley`
 - `branin`
 - `levy`
 - `michal`
 
-#### Multi-Objective, Continuous
+#### Multi-objective, continuous
 - `branin_currin`
 - `carside`
 - `peniciliin`
 - `zdt2`
 
-#### Single-Objective, Tabular
+#### Single-objective, tabular
 - `poas_hydrophobicity`
 - `poas_stability`
 - `zinc_penalized_logp`
@@ -78,7 +79,7 @@ Note that any config field can be overridden from the command line, and some con
 
 ### Acquisition options
 
-#### Single-Objective
+#### Single-objective
 - `cei`
 - `cnei`
 - `cucb`
@@ -86,7 +87,7 @@ Note that any config field can be overridden from the command line, and some con
 - `nei`
 - `ucb`
 
-### Multi-Objective
+### Multi-objective
 - `cehvi`
 - `cnehvi`
 - `ehvi`
@@ -114,5 +115,3 @@ If you use any part of this code for your own work, please cite
       primaryClass={cs.LG}
 }
 ```
-
-
