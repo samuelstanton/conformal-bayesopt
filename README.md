@@ -35,20 +35,62 @@ The experimental data used to produce the plots in our papers is available [here
 
 ## Running the code
 
-update CLI commands
+#### Single-Objective, Continuous
+```bash
+python scripts/black_box_opt.py task=ackley acq_fn=cucb
+```
 
+#### Multi-Objective, Continuous
+```bash
+python scripts/black_box_opt.py task=branin_currin acq_fn=cehvi
+```
 
-Below we list significant configuration options.
+#### Single-Objective, Tabular
+```bash 
+python scripts/tab_bandits.py task=poas_stability acq_fn=cucb
+```
+
+## Configuration Options
+
 See the config files in `./hydra_config` for all configurable parameters.
 Note that any config field can be overridden from the command line, and some configurations are not supported. 
 
-update options
+### Task options
 
-#### Acquisition options
-- `nehvi` (default, multi-objective)
-- `ehvi` (multi-objective)
-- `ei` (single-objective)
-- `greedy` (single and multi-objective)
+#### Single-Objective, Continuous
+- `ackley`
+- `branin`
+- `levy`
+- `michal`
+
+#### Multi-Objective, Continuous
+- `branin_currin`
+- `carside`
+- `peniciliin`
+- `zdt2`
+
+#### Single-Objective, Tabular
+- `poas_hydrophobicity`
+- `poas_stability`
+- `zinc_penalized_logp`
+- `zinc_qed`
+- `zinc_3pbl_docking`
+
+### Acquisition options
+
+#### Single-Objective
+- `cei`
+- `cnei`
+- `cucb`
+- `ei`
+- `nei`
+- `ucb`
+
+### Multi-Objective
+- `cehvi`
+- `cnehvi`
+- `ehvi`
+- `nehvi`
 
 
 ## Tests

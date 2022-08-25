@@ -1,0 +1,3 @@
+_target_: botorch.test_functions.Michalewicz
+dim: 5
+negate: true

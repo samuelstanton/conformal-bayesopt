@@ -1,0 +1,4 @@
+_target_: botorch.test_functions.multi_objective.ZDT2
+negate: true
+dim: 5
+num_objectives: 2

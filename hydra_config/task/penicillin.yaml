@@ -1,2 +1,2 @@
-_target_: botorch.test_functions.multi_objective.BraninCurrin
+_target_: botorch.test_functions.multi_objective.Penicillin
 negate: true
