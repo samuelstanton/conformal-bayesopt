@@ -1,0 +1,63 @@
+project: conformal-bayesopt
+entity: samuelstanton
+method: grid
+# method: bayes
+# metric:
+#   name: f_best
+#   goal: maximize
+# early_terminate:
+#   type: hyperband
+#   min_iter: 8
+#   eta: 2
+parameters:
+  exp_name:
+    value: bbo_single_obj
+  seed:
+    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  task:
+    values: ['ackley', 'levy', 'michal']
+  task.dim:
+    values: [16]
+  acq_fn: 
+    values: ['ucb', 'cucb']
+  rand_orthant:
+    value: true
+  use_turbo_bounds:
+    values: [false]
+
+  # alpha_power:
+  #   min: 0.125
+  #   max: 0.5
+  #   distribution: log_uniform_values
+  # conformal_params.temp:
+  #   min: 1e-4
+  #   max: 0.1
+  #   distribution: log_uniform_values
+  # dr_estimator.lr:
+  #   min: 1e-4
+  #   max: 0.1
+  #   distribution: log_uniform_values
+  # dr_estimator.ema_weight:
+  #   min: 1e-4
+  #   max: 0.1
+  #   distribution: log_uniform_values
+  # dr_estimator.weight_decay:
+  #   min: 1e-6
+  #   max: 1e-3
+  #   distribution: log_uniform_values
+  # opt_params.temperature:
+  #   min: 1e-4
+  #   max: 0.1
+  #   distribution: log_uniform_values
+  # opt_params.lr:
+  #   min: 1e-4
+  #   max: 0.1
+  #   distribution: log_uniform_values
+
+
+program: scripts/black_box_opt.py
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - ${args_no_hyphens}

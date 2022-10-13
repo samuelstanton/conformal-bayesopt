@@ -11,8 +11,6 @@ from gpytorch import lazify
 from botorch.sampling import IIDNormalSampler
 from botorch.posteriors import GPyTorchPosterior
 
-import torchsort
-
 
 def conf_mask_to_bounds(target_grid, conf_pred_mask):
     """
@@ -119,10 +117,10 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     model.eval()
     with torch.no_grad():
         y_post = model.posterior(inputs, observation_noise=True)
-        grid_center = y_post.mvn.mean
-        # warning! evaluating bc of weird GPyTorch lazy tensor broadcasting bug
-        grid_covar = y_post.mvn.lazy_covariance_matrix.evaluate().contiguous()
-        y_post = refine_grid_dist(y_post, grid_center, 2. * grid_covar)
+        # grid_center = y_post.mvn.mean
+        # # warning! evaluating bc of weird GPyTorch lazy tensor broadcasting bug
+        # grid_covar = y_post.mvn.lazy_covariance_matrix.evaluate().contiguous()
+        # y_post = refine_grid_dist(y_post, grid_center, 2. * grid_covar)
 
     # setup
     conditioned_models = None
@@ -329,6 +327,7 @@ def conformal_gp_regression(
     # reshape to (*q_batch_shape, grid_size, q_batch_size, target_dim)
     conf_pred_mask = conf_pred_mask.transpose(-1, -2)
     conf_scores = conf_scores.transpose(-1, -2)
+    ood_mask = ood_mask.transpose(-1, -2)
     q_conf_scores = conf_scores[..., num_old_train:, :].detach()
 
     return conf_pred_mask, updated_gps, q_conf_scores, ood_mask

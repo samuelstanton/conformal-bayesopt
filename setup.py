@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 import os
 import sys
 
@@ -11,25 +11,25 @@ else:
     with open(os.path.join(_here, "README.md"), encoding="utf-8") as f:
         long_description = f.read()
 
-desc = "Code to reproduce experiments from Accelerating Bayesian Optimization for Protein Design" \
-       "with Denoising Autoencoders."
-packages = ["lambo", "experiments", "conformalbo"]
+desc = "Code to reproduce experiments from Bayesian Optimization with Distribution-Free" \
+       "Coverage Guarantees."
+# packages = ["conformalbo"]
 
 setup(
-    name="lambo",
-    version="0.2.0",
+    name="conformal-bayesopt",
+    version="0.1.0",
     description=desc,
     long_description=long_description,
     long_description_content_type='text/markdown',
-    author="Samuel Stanton, Wesley Maddox, and Nate Gruver",
-    author_email="ss13641@nyu.edu",
-    url="https://github.com/samuelstanton/lambo.git",
+    author="Samuel Stanton, Wesley Maddox, and Sanyam Kapoor",
+    author_email="stanton.samuel@gene.com",
+    url="https://github.com/samuelstanton/conformal-bayesopt.git",
     license="Apache-2.0",
-    packages=packages,
+    packages=find_packages(),
     include_package_data=True,
     classifiers=[
         "Development Status :: 3",
         "Intended Audience :: Science/Research",
-        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
     ],
 )

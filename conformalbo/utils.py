@@ -1,11 +1,19 @@
 import torch
 import argparse
 import numpy as np
+import math
+import pandas as pd
+import hydra
+
+from collections.__init__ import namedtuple
+
+from scipy.stats import norm, spearmanr
 
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.constraints import Interval
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
+from botorch import fit_gpytorch_model
 from botorch.models.transforms import Standardize, Normalize
 from botorch.models import SingleTaskGP
 from botorch.test_functions import Branin, Levy, Ackley, Michalewicz
@@ -16,11 +24,10 @@ from botorch.test_functions.multi_objective import (
     ZDT2,
 )
 from botorch.optim.optimize import optimize_acqf, optimize_acqf_list
+from botorch.utils.multi_objective.box_decompositions.non_dominated import FastNondominatedPartitioning
 
-try:
-    from ratio_estimation import optimize_acqf_sgld, optimize_acqf_sgld_list
-except ImportError:
-    from conformalbo.ratio_estimation import optimize_acqf_sgld, optimize_acqf_sgld_list
+from conformalbo.optim.optimize import optimize_acqf_sgld, optimize_acqf_sgld_list
+from conformalbo.helpers import assess_coverage
 
 
 def parse():
@@ -228,7 +235,7 @@ def optimize_acqf_and_get_observation(
         "q": BATCH_SIZE,
         "num_restarts": NUM_RESTARTS,
         "raw_samples": RAW_SAMPLES,
-        "options": {"batch_limit": 5, "maxiter": 200, "sample_around_best": False},
+        "options": {"batch_limit": 8, "maxiter": 200, "sample_around_best": False},
         "sequential": sequential,
         "return_best_only": False
     }
@@ -259,6 +266,13 @@ def optimize_acqf_and_get_observation(
     # accommodate sequentially optimized batches
     all_acq_vals = acq_vals.detach().view(all_x.size(0), -1).sum(-1)
 
+    # in bounds elementwise?
+    in_bounds = (all_x >= bounds[0]).prod(-1) * (all_x <= bounds[1]).prod(-1)
+    # all batch elements in bounds?
+    in_bounds = in_bounds.prod(-1).bool()
+    all_x = all_x[in_bounds]
+    all_acq_vals = all_acq_vals[in_bounds]
+
     # rescale candidates before passing to obj fn
     cube_loc = fn.bounds[0].to(all_x)
     cube_scale = (fn.bounds[1] - fn.bounds[0]).to(all_x)
@@ -276,3 +290,181 @@ def optimize_acqf_and_get_observation(
     # print(f"x*: {best_x}")
 
     return best_x, best_y, best_f, best_a, all_x, all_y
+
+
+fields = ("inputs", "targets")
+defaults = (np.array([]), np.array([]))
+DataSplit = namedtuple("DataSplit", fields, defaults=defaults)
+
+
+def update_splits(
+    train_split: DataSplit,
+    val_split: DataSplit,
+    test_split: DataSplit,
+    new_split: DataSplit,
+    holdout_ratio: float = 0.2,
+):
+    r"""
+    This utility function updates train, validation and test data splits with
+    new observations while preventing leakage from train back to val or test.
+    New observations are allocated proportionally to prevent the
+    distribution of the splits from drifting apart.
+
+    New rows are added to the validation and test splits randomly according to
+    a binomial distribution determined by the holdout ratio. This allows all splits
+    to be updated with as few new points as desired. In the long run the split proportions
+    will converge to the correct values.
+    """
+    train_inputs, train_targets = train_split
+    val_inputs, val_targets = val_split
+    test_inputs, test_targets = test_split
+
+    # shuffle new data
+    new_inputs, new_targets = new_split
+    new_perm = np.random.permutation(
+        np.arange(new_inputs.shape[0])
+    )
+    new_inputs = new_inputs[new_perm]
+    new_targets = new_targets[new_perm]
+
+    unseen_inputs = safe_np_cat([test_inputs, new_inputs])
+    unseen_targets = safe_np_cat([test_targets, new_targets])
+
+    num_rows = train_inputs.shape[0] + val_inputs.shape[0] + unseen_inputs.shape[0]
+    num_test = min(
+        np.random.binomial(num_rows, holdout_ratio / 2.),
+        unseen_inputs.shape[0],
+    )
+    num_test = max(test_inputs.shape[0], num_test) if test_inputs.size else max(1, num_test)
+
+    # first allocate to test split
+    test_split = DataSplit(unseen_inputs[:num_test], unseen_targets[:num_test])
+
+    resid_inputs = unseen_inputs[num_test:]
+    resid_targets = unseen_targets[num_test:]
+    resid_inputs = safe_np_cat([val_inputs, resid_inputs])
+    resid_targets = safe_np_cat([val_targets, resid_targets])
+
+    # then allocate to val split
+    num_val = min(
+        np.random.binomial(num_rows, holdout_ratio / 2.),
+        resid_inputs.shape[0],
+    )
+    num_val = max(val_inputs.shape[0], num_val) if val_inputs.size else max(1, num_val)
+    val_split = DataSplit(resid_inputs[:num_val], resid_targets[:num_val])
+
+    # train split gets whatever is left
+    last_inputs = resid_inputs[num_val:]
+    last_targets = resid_targets[num_val:]
+    train_inputs = safe_np_cat([train_inputs, last_inputs])
+    train_targets = safe_np_cat([train_targets, last_targets])
+    train_split = DataSplit(train_inputs, train_targets)
+
+    return train_split, val_split, test_split
+
+
+def safe_np_cat(arrays, **kwargs):
+    if all([arr.size == 0 for arr in arrays]):
+        return np.array([])
+    cat_arrays = [arr for arr in arrays if arr.size]
+    return np.concatenate(cat_arrays, **kwargs)
+
+
+def fit_and_transform(transform, train_arr, holdout_arr=None):
+    transform.train()
+    train_result = transform(train_arr)
+    transform.eval()
+    if holdout_arr is None:
+        return train_result
+    return train_result, transform(holdout_arr)
+
+
+def fit_surrogate(train_X, train_Y):
+    surrogate = SingleTaskGP(train_X=train_X, train_Y=train_Y)
+    surrogate_mll = ExactMarginalLogLikelihood(surrogate.likelihood, surrogate)
+    surrogate.train()
+    surrogate.requires_grad_(True)
+    fit_gpytorch_model(surrogate_mll)
+    surrogate.requires_grad_(False)
+    surrogate.eval()
+    return surrogate
+
+
+def set_alpha(cfg, num_train, power=0.5):
+    assert power > 0 and power < 1
+    alpha = 1 / num_train ** power
+    cfg.conformal_params['alpha'] = alpha
+    return alpha
+
+
+# def set_beta(cfg):
+#     beta = norm.ppf(1 - cfg.conformal_params.alpha / 2.).item()
+#     if 'beta' in cfg.acq_fn:
+#         cfg.acq_fn.beta = beta
+#     return beta
+
+
+def display_metrics(metrics):
+    df = pd.DataFrame((metrics,)).round(4)
+    print(df.to_markdown())
+
+
+def evaluate_surrogate(cfg, surrogate, holdout_X, holdout_Y, dr_estimator=None, log_prefix=''):
+    eval_metrics = {}
+    # p(y | x, D)
+    y_post = surrogate.posterior(holdout_X, observation_noise=True)
+    # NLL, RMSE, and Spearman's Rho
+    eval_metrics['nll'] = -1 * torch.distributions.Normal(y_post.mean, y_post.variance.sqrt()).log_prob(holdout_Y).mean().item()
+    eval_metrics["rmse"] = (y_post.mean - holdout_Y).pow(2).mean().sqrt().item()
+    try:
+        s_rho = np.stack([
+            spearmanr(
+                holdout_Y[:, idx], y_post.mean[:, idx]
+            ).correlation for idx in range(holdout_Y.shape[-1])
+        ]).mean().item()
+    except Exception:
+        s_rho = float('NaN')
+    eval_metrics["s_rho"] = s_rho
+    # credible and conformal coverage
+    eval_metrics["exp_cvrg"] = 1 - cfg.conformal_params.alpha
+    eval_metrics["cred_cvrg"], eval_metrics["conf_cvrg"] = assess_coverage(
+        surrogate, holdout_X, holdout_Y, ratio_estimator=dr_estimator, **cfg.conformal_params
+    )
+    # add log prefix
+    if len(log_prefix) > 0:
+        eval_metrics = {'_'.join([log_prefix, key]): val for key, val in eval_metrics.items()}
+    display_metrics(eval_metrics)
+    return eval_metrics
+
+
+def construct_acq_fn(cfg, bb_fn, surrogate, baseline_X, baseline_Y, outcome_transform=None, ratio_estimator=None):
+    params = dict(model=surrogate)
+    if "X_baseline" in cfg.acq_fn.params:
+        params['X_baseline'] = baseline_X
+    if 'best_f' in cfg.acq_fn.params:
+        params['best_f'] = baseline_Y.max()
+    if 'beta' in cfg.acq_fn.params:
+        beta = norm.ppf(1 - cfg.conformal_params.alpha / 2.).item()
+        params['beta'] = beta
+    if 'ref_point' in cfg.acq_fn.params:
+        ref_point = bb_fn.ref_point if outcome_transform is None else outcome_transform(bb_fn.ref_point)[0]
+        params['ref_point'] = ref_point.view(-1)
+    if 'partitioning' in cfg.acq_fn.params:
+        ref_point = bb_fn.ref_point if outcome_transform is None else outcome_transform(bb_fn.ref_point)[0]
+        params['partitioning'] = FastNondominatedPartitioning(ref_point, baseline_Y)
+    if 'Conformal' in cfg.acq_fn.obj._target_:
+        params.update(cfg.conformal_params)
+        params['ratio_estimator'] = ratio_estimator
+    return hydra.utils.instantiate(cfg.acq_fn.obj, **params)
+
+
+def get_opt_metrics(bb_fn, baseline_X):
+    metrics = {}
+    baseline_inputs = baseline_X * (bb_fn.bounds[1] - bb_fn.bounds[0]) + bb_fn.bounds[0]
+    baseline_f = bb_fn(baseline_inputs).view(*baseline_inputs.shape[:-1], -1)
+    if baseline_f.shape[-1] == 1:
+        metrics['f_best'] = baseline_f.max().item()
+    else:
+        box_decomp = FastNondominatedPartitioning(bb_fn.ref_point, baseline_f)
+        metrics['f_hypervol'] = box_decomp.compute_hypervolume().item()
+    return metrics

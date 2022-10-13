@@ -1,0 +1,26 @@
+project: conformal-bayesopt
+entity: samuelstanton
+method: grid
+parameters:
+  exp_name:
+    value: tab_bandits
+  seed:
+    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  task:
+    values: ['zinc_penalized_logp', 'zinc_3pbl_docking', 'zinc_qed', 'poas_stability']
+  acq_fn: 
+    values: ['cucb']
+  num_total_rows:
+    value: 256
+  max_num_steps:
+    value: 128
+  num_baseline:
+    value: 32
+
+
+program: scripts/tab_bandits
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - ${args_no_hyphens}

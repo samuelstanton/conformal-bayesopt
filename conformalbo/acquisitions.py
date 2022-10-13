@@ -22,10 +22,8 @@ from botorch.utils.transforms import (
     concatenate_pending_points,
 )
 
-
-from conformalbo.helpers import (
-    construct_conformal_bands,
-)
+from conformalbo.helpers import construct_conformal_bands
+from conformalbo.acquisition.monte_carlo import softplus
 
 
 class ConformalAcquisition(object):
@@ -70,21 +68,21 @@ class ConformalAcquisition(object):
         values = self._nonconformal_fwd(reshaped_x, conditioned_model)
         # integrate w.r.t. batch outcome
         res = _conformal_integration(values, conf_pred_mask, grid_logp, self.alpha, opt_mask, ood_mask)
-
-        return res.view(*orig_batch_shape)
+        return res
 
     def forward(self, X):
         res = self._conformal_fwd(X)
-        return res.max(dim=-1)[0]
+        # return softplus(res, -1, self.temp).mean(0)
+        return res.max(dim=-1).values.mean(0)
 
 
 class qConformalExpectedImprovement(ConformalAcquisition, qExpectedImprovement):
     def __init__(self, alpha, temp, grid_res, max_grid_refinements, ratio_estimator,
-                 optimistic=False, grid_sampler=None, *args, **kwargs):
+                 optimistic=False, grid_sampler=None, randomized=False, *args, **kwargs):
         qExpectedImprovement.__init__(self, *args, **kwargs)
         ConformalAcquisition.__init__(
             self, alpha, temp, grid_res, max_grid_refinements, ratio_estimator,
-            optimistic, grid_sampler
+            optimistic, grid_sampler, randomized
         )
 
     def _nonconformal_fwd(self, X, conditioned_model):
@@ -93,9 +91,11 @@ class qConformalExpectedImprovement(ConformalAcquisition, qExpectedImprovement):
         )
         samples = self.sampler(posterior)
         obj = self.objective(samples, X=X)
-        obj = (obj - self.best_f.unsqueeze(-1).to(obj)).clamp_min(0.)
-        q_ei = obj.mean(dim=0)
-        return q_ei
+        obj = (obj - self.best_f.unsqueeze(-1).to(obj))
+        # replace max(0, obj) with logsumexp
+        obj = torch.stack([obj, torch.zeros_like(obj)], dim=-1)
+        qei_samples = softplus(obj, -1, self.temp)
+        return qei_samples
 
     @concatenate_pending_points
     @t_batch_mode_transform()
@@ -105,11 +105,11 @@ class qConformalExpectedImprovement(ConformalAcquisition, qExpectedImprovement):
 
 class qConformalNoisyExpectedImprovement(ConformalAcquisition, qNoisyExpectedImprovement):
     def __init__(self, alpha, temp, grid_res, max_grid_refinements, ratio_estimator,
-                 optimistic=False, grid_sampler=None, *args, **kwargs):
+                 optimistic=False, grid_sampler=None, randomized=False, *args, **kwargs):
         qNoisyExpectedImprovement.__init__(self, *args, **kwargs)
         ConformalAcquisition.__init__(
             self, alpha, temp, grid_res, max_grid_refinements, ratio_estimator,
-            optimistic, grid_sampler
+            optimistic, grid_sampler, randomized
         )
 
     def _nonconformal_fwd(self, X, conditioned_model):
@@ -126,9 +126,12 @@ class qConformalNoisyExpectedImprovement(ConformalAcquisition, qNoisyExpectedImp
         # else:
         samples = self.sampler(posterior)
         obj = self.objective(samples, X=X_full)
-        diffs = obj[..., -q:] - obj[..., :-q].max(dim=-1, keepdim=True).values
-
-        return diffs.clamp_min(0).mean(dim=0)
+        diffs = (
+            obj[..., -q:] - softplus(obj[..., :-q], -1, self.temp, keepdim=True)
+        )
+        diffs = torch.stack([diffs, torch.zeros_like(diffs)], -1)
+        qnei_samples = softplus(diffs, -1, self.temp)
+        return qnei_samples
 
     @concatenate_pending_points
     @t_batch_mode_transform()
@@ -153,7 +156,7 @@ class qConformalUpperConfidenceBound(ConformalAcquisition, qUpperConfidenceBound
         obj = self.objective(samples, X=X)
         mean = obj.mean(dim=0)
         ucb_samples = mean + self.beta_prime * (obj - mean).abs()
-        return ucb_samples.mean(dim=0)
+        return ucb_samples
 
     @concatenate_pending_points
     @t_batch_mode_transform()
@@ -223,38 +226,23 @@ def _conformal_integration(values, conf_pred_mask, grid_logp, alpha, opt_mask, o
     """
     integrate w.r.t. outcome variables
     """
-    opt_mask = opt_mask.prod(-1, keepdim=True)
-    conf_pred_mask = conf_pred_mask.prod(-1, keepdim=True)
-    ood_mask = ood_mask.prod(-1, keepdim=True)
+    # some acquisition values have a batch dimension, others do not
+    collapse_dims = [i for i in range(values.ndim - 1, conf_pred_mask.ndim)]
+    for i in reversed(collapse_dims):
+        opt_mask = opt_mask.prod(i)
+        conf_pred_mask = conf_pred_mask.prod(i)
+        ood_mask = ood_mask.prod(i)
+        grid_logp = grid_logp.sum(i)
 
-    # combined_mask = conf_pred_mask * opt_mask
-
-    # with torch.no_grad():
-    #     # count total number of optimistic outcomes
-    #     nonconf_weights = 1.
-    #     num_rejected = (1. - conf_pred_mask).sum(-3, keepdim=True)
-    #     nonconf_weights = nonconf_weights / num_rejected.clamp_min(1.)
-    #     scaling_factor = (opt_mask * nonconf_weights).sum(-3, keepdim=True)
-    #     nonconf_weights = (opt_mask * nonconf_weights) / scaling_factor.clamp_min(1e-6)
-    #
-    #     # importance weights
-    #     conf_weights = 1. / grid_logp.exp().clamp_min(1e-6)
-    #     num_accepted = conf_pred_mask.sum(-3, keepdim=True)
-    #     conf_weights = conf_weights / num_accepted.clamp_min(1.)
-    #     # count number of optimistic outcomes in conformal set
-    #     scaling_factor = (opt_mask * conf_weights).sum(dim=-3, keepdim=True)
-    #     # normalize importance weights
-    #     conf_weights = (opt_mask * conf_weights) / scaling_factor.clamp_min(1e-6)
-    #
-    # nonconf_weights = alpha * (1. - conf_pred_mask) * nonconf_weights
-    # conf_weights = (1. - alpha) * conf_pred_mask * conf_weights
+    sum_dim = -3 + len(collapse_dims)
 
     nonconf_weights = (1. - conf_pred_mask) * opt_mask
-    nonconf_weights = nonconf_weights / nonconf_weights.sum(-3, keepdim=True).clamp_min(1e-6)
+    nonconf_weights = nonconf_weights / nonconf_weights.sum(sum_dim, keepdim=True).clamp_min(1e-6)
 
     conf_weights = (conf_pred_mask * opt_mask) / grid_logp.exp().clamp_min(1e-6)
-    conf_weights = conf_weights / conf_weights.sum(-3, keepdim=True).clamp_min(1e-6)
+    conf_weights = conf_weights / conf_weights.sum(sum_dim, keepdim=True).clamp_min(1e-6)
 
     combined_weights = (1. - alpha) * conf_weights + alpha * nonconf_weights
-    values = ((1. - ood_mask) * combined_weights * values[..., None]).sum(-3)
+    values = ((1. - ood_mask) * combined_weights * values).sum(sum_dim)
+
     return values

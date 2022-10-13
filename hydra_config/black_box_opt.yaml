@@ -1,29 +1,60 @@
 defaults:
-  - logger: local
-  - task: regex
-  - acquisition: nehvi
-  - encoder: mlm_cnn
-  - optimizer: lambo
-  - optimizer/algorithm: soga
-  - tokenizer: protein
-  - surrogate: multi_task_exact_gp
+ - task: levy
+ - acq_fn: cucb
 
-seed: ${trial_id}
-trial_id: 0
-project_name: lambo
-version: v0.2.0
+noise_se: 0.1
+num_init: 16
+rand_orthant: true
+
+num_opt_restarts: 8
+q_batch_size: 2
+num_q_batches: 32
+num_samples: 64
+alpha_power: 0.35
+
+use_turbo_bounds: false
+
+holdout_frac: 0.25
+
+conformal_params:
+  alpha: null
+  grid_res: ${num_samples}
+  max_grid_refinements: 0
+  temp: 3e-2
+  randomized: true
+
+dr_estimator:
+  _target_: conformalbo.ratio_estimation.RatioEstimator
+  lr: 5e-3
+  ema_weight: 2e-2
+  weight_decay: 5e-6
+
+opt_params:
+  temperature: 4e-3  # SGLD temperature
+  lr: 2e-2  # SGLD learning rate
+  sgld_steps: 512
+
+dtype: float
+seed: 0
+trial_id: ${seed}
+project_name: conformal-bayesopt
+version: v0.0.8
 
 # Directories for loading and storing data
-data_dir: data/experiments
-exp_name: test
+data_dir: ./data
+exp_name: test_bbo
 job_name: null
 timestamp: ${now:%Y-%m-%d_%H-%M-%S}
-log_dir: ${data_dir}/${exp_name}
+log_dir: ${data_dir}/${exp_name}/${job_name}/${timestamp}
 wandb_mode: online
+
+logger:
+  _target_: upcycle.logging.DataFrameLogger
+  log_dir: ${log_dir}
 
 hydra:
   run:
-    dir: ./${log_dir}
+    dir: ./
   sweep:
-    dir: ./${log_dir}
-    subdir: .
+    dir: ./
+    subdir: ./
