@@ -4,15 +4,21 @@
 ## Abstract
 
 Bayesian optimization is a coherent, ubiquitous approach to decision-making under uncertainty, with applications including multi-arm bandits, active learning, and black-box optimization.
-Bayesian optimization selects decisions (i.e. queries) with maximal expected utility with respect to the posterior distribution of a Bayesian model which quantifies reducible, epistemic uncertainty about query outcomes.
-In practice outcomes with negligible posterior likelihood can occur regularly for two reasons: 1) lack of training data near the Bayes-optimal query and 2) model misspecification.
-Conformal prediction is a frequentist procedure that uses imperfect models to make predictions with distribution-free coverage guarantees, with rigorous means of identifying which outcomes cannot be predicted accurately.
-In this work we propose conformal Bayesian optimization, which directs queries towards regions of search space where the model is valid, and demonstrates significantly improved query coverage and competitive sample-efficiency on a suite of single and multi-objective tasks.
+Bayesian optimization selects decisions (i.e. objective function queries) with maximal expected utility with respect to the posterior distribution of a Bayesian model, which quantifies reducible, epistemic uncertainty about query outcomes.
+In practice, subjectively implausible outcomes can occur regularly for two reasons: 1) model misspecification and 2) covariate shift.
+Conformal prediction is an uncertainty quantification method with coverage guarantees even for misspecified models and a simple mechanism to correct for covariate shift.
+We propose conformal Bayesian optimization, which directs queries towards regions of search space where the model predictions have guaranteed validity, and investigate its behavior on a suite of black-box optimization tasks and tabular ranking tasks.
+In many cases we find that query coverage can be significantly improved without harming sample-efficiency.
 
-## Key Results
+## Main Idea
 
 ![Figure 1](https://github.com/samuelstanton/conformal-bayesopt/blob/refactor/conformalbo/assets/figures/branin_example_v0.0.2.png?raw=true)
 
+We want $\vec x^* \in [0, 1]^2$ which maximizes the Branin objective \textbf{(a)}, starting from $8$ examples in the upper right (the black dots).
+The upper-confidence bound (UCB) acquisition function \textbf{(b)} selects the next query (the \textcolor{red}{red} star) far from any training data, where we cannot guarantee reliable predictions.
+In higher dimensions, we will exhaust our query budget long before covering the whole search space with training data.
+Given a miscoverage tolerance $\alpha = 1 / \sqrt{8}$, conformal UCB \textbf{(c)} directs the search to the region where conformal predictions are guaranteed coverage of at least $(1 - \alpha)$.
+\textbf{(d)} The dashed line is the set $\vec x$ such that $w(\vec x) \propto p_{\mathrm{query}}(\vec x) / p_{\mathrm{train}}(\vec x)$ is exactly $\alpha$.
 
 ## Installation
 
