@@ -14,11 +14,11 @@ In many cases we find that query coverage can be significantly improved without 
 
 ![Figure 1](https://github.com/samuelstanton/conformal-bayesopt/blob/refactor/conformalbo/assets/figures/branin_example_v0.0.2.png?raw=true)
 
-We want $\mathbf x^* \in [0, 1]^2$ which maximizes the Branin objective \textbf{(a)}, starting from $8$ examples in the upper right (the black dots).
-The upper-confidence bound (UCB) acquisition function \textbf{(b)} selects the next query (the \textcolor{red}{red} star) far from any training data, where we cannot guarantee reliable predictions.
+We want $\mathbf x^* \in [0, 1]^2$ which maximizes the Branin objective **(a)**, starting from $8$ examples in the upper right (the black dots).
+The upper-confidence bound (UCB) acquisition function **(b)** selects the next query (the \textcolor{red}{red} star) far from any training data, where we cannot guarantee reliable predictions.
 In higher dimensions, we will exhaust our query budget long before covering the whole search space with training data.
-Given a miscoverage tolerance $\alpha = 1 / \sqrt{8}$, conformal UCB \textbf{(c)} directs the search to the region where conformal predictions are guaranteed coverage of at least $(1 - \alpha)$.
-\textbf{(d)} The dashed line is the set $\mathbf x$ such that $w(\mathbf x) \propto p_{\mathrm{query}}(\mathbf x) / p_{\mathrm{train}}(\mathbf x)$ is exactly $\alpha$.
+Given a miscoverage tolerance $\alpha = 1 / \sqrt{8}$, conformal UCB **(c)** directs the search to the region where conformal predictions are guaranteed coverage of at least $(1 - \alpha)$.
+**(d)** The dashed line is the set $\mathbf x$ such that $w(\mathbf x) \propto p_{\mathrm{query}}(\mathbf x) / p_{\mathrm{train}}(\mathbf x)$ is exactly $\alpha$.
 
 ## Installation
 
