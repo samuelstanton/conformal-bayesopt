@@ -11,7 +11,7 @@ In this work we propose conformal Bayesian optimization, which directs queries t
 
 ## Key Results
 
-![Figure 1](https://github.com/samuelstanton/conformal-bayesopt/blob/refactor/conformalbo/assets/figures/branin_example_v0.0.2.pdf?raw=true)
+![Figure 1](https://github.com/samuelstanton/conformal-bayesopt/blob/refactor/conformalbo/assets/figures/branin_example_v0.0.2.png?raw=true)
 
 
 ## Installation
