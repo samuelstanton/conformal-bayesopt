@@ -1,5 +1,6 @@
 import math
 import torch
+import wandb
 
 from torch import Tensor
 
@@ -106,8 +107,6 @@ def optimize_acqf_sgld(
         >>>     qEI, bounds, 3, 15, 256, sequential=True
         >>> )
     """
-    print(sgld_steps, temperature, lr)
-
     if sequential and q > 1:
         if not return_best_only:
             raise NotImplementedError(
@@ -214,6 +213,7 @@ def optimize_acqf_sgld(
     ]
     dr_estimates = [acq_function.ratio_estimator(batch_initial_conditions), None]
     for _s in range(sgld_steps):
+        avg_grad_norm = 0.
         for batch_idx, (ic_batch, batch_optimizer) in enumerate(zip(batched_ics, sgld_optimizers)):
             # once SGLD chain has warmed up start training density ratio estimator
             if _s >= warmup_steps:
@@ -226,25 +226,17 @@ def optimize_acqf_sgld(
                 batched_acq_values_ = acq_function(ic_batch)
                 batch_optimizer.zero_grad()
                 neg_log_density = -batched_acq_values_.sum()
-                # lb_violation = torch.max(
-                #     2 * (torch.sigmoid((bounds[0] - ic_batch) / 1.) - 0.5),
-                #     torch.zeros_like(ic_batch),
-                # ).sum()
-                # ub_violation = torch.max(
-                #     2 * (torch.sigmoid((ic_batch - bounds[1]) / 1.) - 0.5),
-                #     torch.zeros_like(ic_batch),
-                # ).sum()
                 lb_violation = torch.sigmoid((bounds[0] - ic_batch) / 1e-2).mean()
                 ub_violation = torch.sigmoid((ic_batch - bounds[1]) / 1e-2).mean()
                 loss = neg_log_density + 1e2 * (lb_violation + ub_violation)
                 loss.backward()
+                # avg_grad_norm += ic_batch.grad.norm().item() / len(batched_ics)
                 batch_optimizer.step()
                 sgld_lr_scheds[batch_idx].step()
 
-            # dr_estimates[1] = acq_function.ratio_estimator(batch_initial_conditions)
-            # dr_est_diff = torch.norm(dr_estimates[0] - dr_estimates[1]) / torch.norm(dr_estimates[1] + 1e-6)
-            # print(f"density ratio estimate rel diff: {dr_est_diff.item():0.4f}")
-            # dr_estimates[0] = dr_estimates[1].clone()
+            # if _s % 32 == 31:
+            #     print(f"[SGLD] step {_s}, ||grad_x||_2: {avg_grad_norm:0.4f}")
+
 
     batched_iterates = [torch.stack(iterates, dim=1) for iterates in sgld_iterates]
     batch_candidates = torch.cat(batched_iterates)
@@ -286,44 +278,6 @@ def optimize_acqf_sgld(
             batch_candidates = acq_function.extract_candidates(X_full=batch_candidates)
 
     return batch_candidates, batch_acq_values
-
-
-    # # final evaluation
-    # with torch.no_grad():
-    #     flat_cands = batch_candidates.flatten(0, -3)
-    #     flat_acq_vals = torch.cat([
-    #         acq_function(cand_batch) for cand_batch in flat_cands.split(batch_limit)
-    #     ])
-
-    # # check bounds
-    # try:
-    #     # in bounds elementwise?
-    #     in_bounds = (flat_cands >= bounds[0]).prod(-1) * (flat_cands <= bounds[1]).prod(-1)
-    #     # in bounds batchwise?
-    #     in_bounds = in_bounds.prod(-1).bool()
-    #     batch_candidates = flat_cands[in_bounds]
-    #     batch_acq_values = flat_acq_vals[in_bounds]
-    # # if none feasible, use initial solutions
-    # except:
-    #     print('all SGLD iterates out of bounds, reverting to initial conditions')
-    #     batch_candidates = batch_initial_conditions.flatten(0, -3)
-    #     batch_acq_values = torch.cat([
-    #         acq_function(cand_batch) for cand_batch in batch_candidates.split(batch_limit)
-    #     ])
-
-    # if post_processing_func is not None:
-    #     batch_candidates = post_processing_func(batch_candidates)
-
-    # if return_best_only:
-    #     best = torch.argmax(batch_acq_values, dim=0)
-    #     batch_candidates = batch_candidates[best]
-    #     batch_acq_values = batch_acq_values[best]
-
-    # if isinstance(acq_function, OneShotAcquisitionFunction):
-    #     if not kwargs.get("return_full_tree", False):
-    #         batch_candidates = acq_function.extract_candidates(X_full=batch_candidates)
-
-    # return batch_candidates, batch_acq_values
 
 
 def optimize_acqf_sgld_list(

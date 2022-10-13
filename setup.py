@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 import os
 import sys
 
@@ -13,7 +13,7 @@ else:
 
 desc = "Code to reproduce experiments from Bayesian Optimization with Distribution-Free" \
        "Coverage Guarantees."
-packages = ["conformalbo"]
+# packages = ["conformalbo"]
 
 setup(
     name="conformal-bayesopt",
@@ -25,7 +25,7 @@ setup(
     author_email="stanton.samuel@gene.com",
     url="https://github.com/samuelstanton/conformal-bayesopt.git",
     license="Apache-2.0",
-    packages=packages,
+    packages=find_packages(),
     include_package_data=True,
     classifiers=[
         "Development Status :: 3",

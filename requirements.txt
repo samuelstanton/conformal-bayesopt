@@ -1,7 +1,7 @@
 setuptools==60.2.0
 numpy==1.22.3
-git+https://github.com/cornellius-gp/gpytorch.git@master
-git+https://github.com/pytorch/botorch.git@main
+gpytorch==1.9.0
+botorch==0.7
 git+https://github.com/samuelstanton/upcycle.git@master
 wandb==0.12.21
 biopython==1.79

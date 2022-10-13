@@ -1,4 +1,4 @@
-# [Bayesian Optimization with Distribution-Free Coverage Guarantees](https://arxiv.org/abs/2203.12742)
+# [Bayesian Optimization with Conformal Coverage Guarantees](https://arxiv.org/abs/2203.12742)
 (fix ArXiv link)
 
 ## Abstract
@@ -22,7 +22,7 @@ replace figure
 git clone https://github.com/samuelstanton/conformal-bayesopt && cd conformal-bayesopt
 conda create --name conf-bo-env python=3.8 -y && conda activate conf-bo-env
 conda install -c conda-forge rdkit -y
-conda install -c pytorch torchvision cudatoolkit=11.3
+conda install -c pytorch cudatoolkit=11.3
 pip install -r requirements.txt --upgrade
 pip install -e .
 ```

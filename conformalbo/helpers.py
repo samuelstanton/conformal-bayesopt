@@ -117,10 +117,10 @@ def construct_conformal_bands(model, inputs, alpha, temp, grid_res, max_grid_ref
     model.eval()
     with torch.no_grad():
         y_post = model.posterior(inputs, observation_noise=True)
-        grid_center = y_post.mvn.mean
-        # warning! evaluating bc of weird GPyTorch lazy tensor broadcasting bug
-        grid_covar = y_post.mvn.lazy_covariance_matrix.evaluate().contiguous()
-        y_post = refine_grid_dist(y_post, grid_center, 2. * grid_covar)
+        # grid_center = y_post.mvn.mean
+        # # warning! evaluating bc of weird GPyTorch lazy tensor broadcasting bug
+        # grid_covar = y_post.mvn.lazy_covariance_matrix.evaluate().contiguous()
+        # y_post = refine_grid_dist(y_post, grid_center, 2. * grid_covar)
 
     # setup
     conditioned_models = None

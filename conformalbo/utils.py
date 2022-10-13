@@ -3,6 +3,7 @@ import argparse
 import numpy as np
 import math
 import pandas as pd
+import hydra
 
 from collections.__init__ import namedtuple
 
@@ -23,6 +24,7 @@ from botorch.test_functions.multi_objective import (
     ZDT2,
 )
 from botorch.optim.optimize import optimize_acqf, optimize_acqf_list
+from botorch.utils.multi_objective.box_decompositions.non_dominated import FastNondominatedPartitioning
 
 from conformalbo.optim.optimize import optimize_acqf_sgld, optimize_acqf_sgld_list
 from conformalbo.helpers import assess_coverage
@@ -233,7 +235,7 @@ def optimize_acqf_and_get_observation(
         "q": BATCH_SIZE,
         "num_restarts": NUM_RESTARTS,
         "raw_samples": RAW_SAMPLES,
-        "options": {"batch_limit": 5, "maxiter": 200, "sample_around_best": False},
+        "options": {"batch_limit": 8, "maxiter": 200, "sample_around_best": False},
         "sequential": sequential,
         "return_best_only": False
     }
@@ -263,6 +265,13 @@ def optimize_acqf_and_get_observation(
     all_x = candidates.view(-1, BATCH_SIZE, bounds.size(-1)).detach()
     # accommodate sequentially optimized batches
     all_acq_vals = acq_vals.detach().view(all_x.size(0), -1).sum(-1)
+
+    # in bounds elementwise?
+    in_bounds = (all_x >= bounds[0]).prod(-1) * (all_x <= bounds[1]).prod(-1)
+    # all batch elements in bounds?
+    in_bounds = in_bounds.prod(-1).bool()
+    all_x = all_x[in_bounds]
+    all_acq_vals = all_acq_vals[in_bounds]
 
     # rescale candidates before passing to obj fn
     cube_loc = fn.bounds[0].to(all_x)
@@ -381,8 +390,9 @@ def fit_surrogate(train_X, train_Y):
     return surrogate
 
 
-def set_alpha(cfg, num_train):
-    alpha = 1 / math.sqrt(num_train)
+def set_alpha(cfg, num_train, power=0.5):
+    assert power > 0 and power < 1
+    alpha = 1 / num_train ** power
     cfg.conformal_params['alpha'] = alpha
     return alpha
 
@@ -425,3 +435,36 @@ def evaluate_surrogate(cfg, surrogate, holdout_X, holdout_Y, dr_estimator=None, 
         eval_metrics = {'_'.join([log_prefix, key]): val for key, val in eval_metrics.items()}
     display_metrics(eval_metrics)
     return eval_metrics
+
+
+def construct_acq_fn(cfg, bb_fn, surrogate, baseline_X, baseline_Y, outcome_transform=None, ratio_estimator=None):
+    params = dict(model=surrogate)
+    if "X_baseline" in cfg.acq_fn.params:
+        params['X_baseline'] = baseline_X
+    if 'best_f' in cfg.acq_fn.params:
+        params['best_f'] = baseline_Y.max()
+    if 'beta' in cfg.acq_fn.params:
+        beta = norm.ppf(1 - cfg.conformal_params.alpha / 2.).item()
+        params['beta'] = beta
+    if 'ref_point' in cfg.acq_fn.params:
+        ref_point = bb_fn.ref_point if outcome_transform is None else outcome_transform(bb_fn.ref_point)[0]
+        params['ref_point'] = ref_point.view(-1)
+    if 'partitioning' in cfg.acq_fn.params:
+        ref_point = bb_fn.ref_point if outcome_transform is None else outcome_transform(bb_fn.ref_point)[0]
+        params['partitioning'] = FastNondominatedPartitioning(ref_point, baseline_Y)
+    if 'Conformal' in cfg.acq_fn.obj._target_:
+        params.update(cfg.conformal_params)
+        params['ratio_estimator'] = ratio_estimator
+    return hydra.utils.instantiate(cfg.acq_fn.obj, **params)
+
+
+def get_opt_metrics(bb_fn, baseline_X):
+    metrics = {}
+    baseline_inputs = baseline_X * (bb_fn.bounds[1] - bb_fn.bounds[0]) + bb_fn.bounds[0]
+    baseline_f = bb_fn(baseline_inputs).view(*baseline_inputs.shape[:-1], -1)
+    if baseline_f.shape[-1] == 1:
+        metrics['f_best'] = baseline_f.max().item()
+    else:
+        box_decomp = FastNondominatedPartitioning(bb_fn.ref_point, baseline_f)
+        metrics['f_hypervol'] = box_decomp.compute_hypervolume().item()
+    return metrics
