@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=conf-bo
 #SBATCH --open-mode=append
-#SBATCH --output=/scratch/ss13641/code/remote/conformal-bayesopt/experiments/tabular/output/%x_%j.out
-#SBATCH --error=/scratch/ss13641/code/remote/conformal-bayesopt/experiments/tabular/error/%x_%j.err
+#SBATCH --output=/scratch/ss13641/code/remote/conformal-bayesopt/experiments/output/%x_%j.out
+#SBATCH --error=/scratch/ss13641/code/remote/conformal-bayesopt/experiments/error/%x_%j.err
 #SBATCH --export=ALL
 #SBATCH --gres=gpu:1
 #SBATCH --time=12:00:00

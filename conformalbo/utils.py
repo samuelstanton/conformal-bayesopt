@@ -468,3 +468,21 @@ def get_opt_metrics(bb_fn, baseline_X):
         box_decomp = FastNondominatedPartitioning(bb_fn.ref_point, baseline_f)
         metrics['f_hypervol'] = box_decomp.compute_hypervolume().item()
     return metrics
+
+
+# TODO deprecate
+class Normalizer(object):
+    def __init__(self, loc=0., scale=1.):
+        self.loc = loc
+        self.scale = np.where(scale != 0, scale, 1.)
+
+    def __call__(self, arr):
+        min_val = self.loc - 4 * self.scale
+        max_val = self.loc + 4 * self.scale
+        clipped_arr = np.clip(arr, a_min=min_val, a_max=max_val)
+        norm_arr = (clipped_arr - self.loc) / self.scale
+
+        return norm_arr
+
+    def inv_transform(self, arr):
+        return self.scale * arr + self.loc

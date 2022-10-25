@@ -305,11 +305,11 @@ def conformal_gp_regression(
 
     if randomized:
         diff = masked_weights[..., -1, :].clamp_min(1e-6)
-        lb_prob = (
+        ub_prob = (
             (cum_weights[..., -1, :] - alpha) / diff
         ).clamp(0., 1.)
-        randomization_mask = torch.distributions.Bernoulli(probs=1. - lb_prob).sample()
-        cum_weights = cum_weights[..., -2, :] + randomization_mask.to(diff) * diff
+        use_ub = torch.distributions.Bernoulli(probs=ub_prob).sample()
+        cum_weights = cum_weights[..., -1, :] - (1. - use_ub).to(diff) * diff
     else:
         cum_weights = cum_weights[..., -1, :]
 
