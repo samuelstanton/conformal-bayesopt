@@ -11,7 +11,7 @@ In many cases we find that query coverage can be significantly improved without 
 
 ## Main Idea
 
-![Figure 1](https://github.com/samuelstanton/conformal-bayesopt/blob/refactor/conformalbo/assets/figures/branin_example_v0.0.2.png?raw=true)
+![Figure 1](https://github.com/samuelstanton/conformal-bayesopt/blob/master/conformalbo/assets/figures/branin_example_v0.0.2.png?raw=true)
 
 We want $\mathbf x^* \in [0, 1]^2$ which maximizes the Branin objective **(left panel)**, starting from $8$ examples in the upper right (the black dots).
 The upper-confidence bound (UCB) acquisition function **(center left panel)** selects the next query (the \textcolor{red}{red} star) far from any training data, where we cannot guarantee reliable predictions.
