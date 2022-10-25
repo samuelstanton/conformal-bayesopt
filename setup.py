@@ -11,9 +11,8 @@ else:
     with open(os.path.join(_here, "README.md"), encoding="utf-8") as f:
         long_description = f.read()
 
-desc = "Code to reproduce experiments from Bayesian Optimization with Distribution-Free" \
+desc = "Code to reproduce experiments from Bayesian Optimization with Conformal" \
        "Coverage Guarantees."
-# packages = ["conformalbo"]
 
 setup(
     name="conformal-bayesopt",
