@@ -1,5 +1,4 @@
-# [Bayesian Optimization with Conformal Coverage Guarantees](https://arxiv.org/abs/2203.12742)
-(fix ArXiv link)
+# [Bayesian Optimization with Conformal Coverage Guarantees](https://arxiv.org/abs/2210.12496)
 
 ## Abstract
 
@@ -30,13 +29,6 @@ conda install -c pytorch cudatoolkit=11.3
 pip install -r requirements.txt --upgrade
 pip install -e .
 ```
-
-## Reproducing the figures
-
-This project uses [Weight and Biases](https://docs.wandb.ai/) for logging.
-
-The experimental data used to produce the plots in our papers is available [here](https://wandb.ai/samuelstanton/conformal-bayesopt).
-
 
 ## Running the code
 
@@ -111,10 +103,10 @@ If you use any part of this code for your own work, please cite
 
 ```
 @misc{stanton2022bayesian,
-      title={Bayesian Optimization with Distribution-Free Coverage Guarantees}, 
-      author={Samuel Stanton and Wesley Maddox and Sanyam Kapoor and Andrew Gordon Wilson},
+      title={Bayesian Optimization with Conformal Coverage Guarantees}, 
+      author={Samuel Stanton and Wesley Maddox and Andrew Gordon Wilson},
       year={2022},
-      eprint={2203.12742},
+      eprint={2210.12496},
       archivePrefix={arXiv},
       primaryClass={cs.LG}
 }
